@@ -4,9 +4,9 @@ import asyncio
 import logging
 import time
 import socketio
-from fastapi import FastAPI, HTTPException, Query as FastAPIQuery
+from fastapi import FastAPI, HTTPException, Query as FastAPIQuery, Body, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional
 import json
@@ -17,7 +17,7 @@ from firestore_db import MockFirestoreClient, SessionLocal, SystemEvent, FieldFi
 from game.round_engine import RoundEngine, DEFAULT_STAKE, VALID_STAKES, SELECTION_DURATION, GAME_LENGTH_RANGE
 from handlers.user_manager import UserManager
 from handlers.bot_content import get_bot_text
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, date, timedelta, timezone
 from telegram import Bot
 # Firebase replaced by SQLAlchemy emulator (firestore_db.py)
 
@@ -841,6 +841,15 @@ def _get_pending_deposit_count(user_id: int) -> int:
 
 async def _notify_admin_deposit_web(deposit_data: dict, deposit_id: str):
     try:
+        from config import ADMIN_BOT_TOKEN, BOT_TOKEN, ADMIN_CHAT_ID
+        if not ADMIN_CHAT_ID:
+            logger.warning("[NotifyAdminDeposit] ADMIN_CHAT_ID not configured.")
+            return
+        token = ADMIN_BOT_TOKEN or BOT_TOKEN
+        if not token:
+            logger.warning("[NotifyAdminDeposit] Neither ADMIN_BOT_TOKEN nor BOT_TOKEN configured.")
+            return
+        
         text = get_bot_text(
             'admin_deposit_notification',
             db,
@@ -852,20 +861,17 @@ async def _notify_admin_deposit_web(deposit_data: dict, deposit_id: str):
             deposit_id=deposit_id,
             timestamp=datetime.now(tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'),
         )
-        keyboard = {
-            "inline_keyboard": [
-                [
-                    {"text": "✅ Approve", "callback_data": f"approve_{deposit_id}"},
-                    {"text": "❌ Reject", "callback_data": f"reject_{deposit_id}"},
-                ]
-            ]
-        }
-        bot = Bot(token=ADMIN_BOT_TOKEN) if ADMIN_BOT_TOKEN else Bot(token=BOT_TOKEN)
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Approve", callback_data=f"approve_{deposit_id}"),
+             InlineKeyboardButton("❌ Reject", callback_data=f"reject_{deposit_id}")]
+        ])
+        bot = Bot(token=token)
         await bot.send_message(
             chat_id=int(ADMIN_CHAT_ID),
             text=text,
             parse_mode='Markdown',
-            reply_markup=keyboard,
+            reply_markup=kb,
         )
     except Exception as e:
         logger.warning(f"[NotifyAdminDeposit] Error: {e}")
@@ -1633,7 +1639,7 @@ async def gateway_db_update_doc(collection: str, doc_id: str, payload: dict = Bo
         parsed_data = {}
         for k, v in data.items():
             if isinstance(v, dict) and v.get("_type") == "Increment":
-                parsed_data[k] = firestore.Increment(v.get("value", 0))
+                parsed_data[k] = Increment(v.get("value", 0))
             else:
                 parsed_data[k] = v
         ref.update(parsed_data)
