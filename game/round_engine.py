@@ -35,6 +35,7 @@ class RoundEngine:
         self.db = db
         self.master_ref = db.collection('cartelas_master')
         self.rounds_ref = db.collection('rounds')
+        self._round_locks = {}
 
     # ═══════════════════════════════════════════════════════════════
     # Cartela Generation (one-time, admin-triggered)
@@ -160,9 +161,9 @@ class RoundEngine:
         doc_ref.set(round_data)
         return {'id': doc_ref.id, **round_data}
 
-    async def join_round(self, round_id: str, user_id: int, 
-                         cartela_numbers: List[int], user_name: str) -> dict:
-        """Player joins a round with chosen cartelas (max 2)."""
+    def join_round_sync(self, round_id: str, user_id: int, 
+                        cartela_numbers: List[int], user_name: str) -> dict:
+        """Synchronous implementation of player joining a round."""
         if len(cartela_numbers) > MAX_CARTELAS_PER_PLAYER:
             return {'error': f'Maximum {MAX_CARTELAS_PER_PLAYER} cartelas allowed'}
         if len(cartela_numbers) == 0:
@@ -182,7 +183,9 @@ class RoundEngine:
             return {'error': 'Round not found'}
 
         round_data = round_doc.to_dict()
-        if round_data['status'] != 'selecting':
+        status = round_data.get('status')
+        called = round_data.get('called_numbers', [])
+        if status != 'selecting' and not (status == 'playing' and len(called) == 0):
             return {'error': 'Round is no longer accepting players'}
 
         # Check if cartelas are already taken
@@ -202,10 +205,27 @@ class RoundEngine:
         user_ref = self.db.collection('users').document(uid_str)
         user_doc = user_ref.get()
         if not user_doc.exists:
-            return {'error': 'User not found'}
+            user_data = {
+                'user_id': user_id,
+                'first_name': user_name or 'Player',
+                'username': '',
+                'balance': 0,
+                'play_wallet': 270.0,
+                'bonus': 0,
+                'phone': '',
+                'registered': True,
+                'total_games': 0,
+                'wins': 0,
+                'losses': 0,
+                'is_playing': False,
+                'created_at': datetime.now(tz=timezone.utc),
+                'updated_at': datetime.now(tz=timezone.utc),
+            }
+            user_ref.set(user_data)
+        else:
+            user_data = user_doc.to_dict()
 
-        user_data = user_doc.to_dict()
-        pw = user_data.get('play_wallet', 0)
+        pw = float(user_data.get('play_wallet', 0))
         if pw < total_cost:
             return {'error': f'Not enough balance. Need {total_cost} ETB, have {pw} ETB'}
 
@@ -220,6 +240,17 @@ class RoundEngine:
         round_doc_final = self.rounds_ref.document(round_id).get()
         if round_doc_final.exists:
             round_data_final = round_doc_final.to_dict()
+            status_final = round_data_final.get('status')
+            called_final = round_data_final.get('called_numbers', [])
+            if status_final != 'selecting' and not (status_final == 'playing' and len(called_final) == 0):
+                # Rollback: refund the user
+                user_ref.update({
+                    'play_wallet': pw,
+                    'is_playing': False,
+                    'updated_at': datetime.now(tz=timezone.utc),
+                })
+                return {'error': 'Round is no longer accepting players'}
+
             taken_final = set(round_data_final.get('taken_cartelas', []))
             for num in cartela_numbers:
                 if num in taken_final:
@@ -231,6 +262,10 @@ class RoundEngine:
                     })
                     return {'error': f'Cartela #{num} was just taken by another player. Please select different cards.'}
 
+        new_pc = round_data.get('player_count', 0) + len(cartela_numbers)
+        total_pool = new_pc * round_stake
+        derash = total_pool * 0.75
+
         self.rounds_ref.document(round_id).update({
             f'players.{uid_str}': {
                 'cartelas': cartela_numbers,
@@ -239,14 +274,28 @@ class RoundEngine:
             },
             'player_count': Increment(len(cartela_numbers)),
             'taken_cartelas': ArrayUnion(cartela_numbers),
+            'derash': derash,
         })
 
         return {
             'status': 'joined',
             'cost': total_cost,
             'cartelas': cartela_numbers,
-            'player_count': round_data.get('player_count', 0) + len(cartela_numbers),
+            'player_count': new_pc,
         }
+
+    async def join_round(self, round_id: str, user_id: int, 
+                         cartela_numbers: List[int], user_name: str) -> dict:
+        """Player joins a round with chosen cartelas (max 2).
+        Serialized per round via asyncio.Lock to prevent DB lock contention and RAM spikes under high concurrency.
+        """
+        if round_id not in self._round_locks:
+            self._round_locks[round_id] = asyncio.Lock()
+
+        async with self._round_locks[round_id]:
+            return await asyncio.to_thread(
+                self.join_round_sync, round_id, user_id, cartela_numbers, user_name
+            )
 
     async def start_round(self, round_id: str) -> dict:
         """Transition round from 'selecting' to 'playing'."""
