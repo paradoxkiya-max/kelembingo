@@ -1,14 +1,52 @@
 services:
+  # ── Gateway: API + Engine + SQLite ──
   - type: web
-    name: kelembingo
+    name: kelembingo-gateway
     runtime: docker
     plan: free
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./Dockerfile.gateway
     dockerContext: .
     healthCheckPath: /api/health
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
+      - key: BACKUP_INTERVAL_MINUTES
+        value: "1"
+      - key: INTERNAL_API_KEY
+        value: kelembingo-internal-secret-2026
+      - key: BOT_TOKEN
+        value: 8611354352:AAG1QIDwoUah0Ifv_4zlerfaW0fQN7dNxAs
+      - key: ADMIN_BOT_TOKEN
+        value: 8831372470:AAHDxwpr6X1RRfRXpwhNpLsdxo2p-ORbvI0
+      - key: ADMIN_CHAT_ID
+        value: "8462274722"
     autoDeploy: true
 
-
+  # ── Bots: Telegram bot processes ──
+  - type: web
+    name: kelembingo-bots
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile.bot
+    dockerContext: .
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: USE_GATEWAY
+        value: "true"
+      - key: GATEWAY_URL
+        value: https://kelembingo-gateway-gjfl.onrender.com
+      - key: WEBAPP_URL
+        value: https://kelembingo-frontend.onrender.com/game.html
+      - key: INTERNAL_API_KEY
+        value: kelembingo-internal-secret-2026
+      - key: BOT_TOKEN
+        value: 8611354352:AAG1QIDwoUah0Ifv_4zlerfaW0fQN7dNxAs
+      - key: ADMIN_BOT_TOKEN
+        value: 8831372470:AAHDxwpr6X1RRfRXpwhNpLsdxo2p-ORbvI0
+      - key: PAYMENT_BOT_TOKEN
+        value: 8801537534:AAEi3UflU4TRCJ10TRlqxMSAF3l7RS4-vYc
+      - key: ADMIN_CHAT_ID
+        value: "8462274722"
+    autoDeploy: true

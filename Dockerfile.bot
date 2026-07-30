@@ -14,4 +14,4 @@ COPY . .
 
 EXPOSE 8000
 
-CMD ["python", "run_gateway.py"]
+CMD ["python", "run_bots.py"]

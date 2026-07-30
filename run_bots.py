@@ -92,13 +92,28 @@ def auto_restore_on_startup():
         logger.warning(f"Startup restore error (continuing with empty DB): {e}")
 
 
+def run_health_check_server():
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    port = int(os.environ.get("PORT", 8000))
+    class HealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(b'{"status": "ok", "service": "bots"}')
+        def log_message(self, format, *args):
+            return
+    server = HTTPServer(('0.0.0.0', port), HealthHandler)
+    server.serve_forever()
+
+
 if __name__ == "__main__":
     try:
         multiprocessing.set_start_method("spawn")
     except RuntimeError:
         pass
 
-    logger.info("🚀 Starting Kelem Bingo Platform...")
+    logger.info("🚀 Starting Kelem Bingo Bot Service...")
 
     # Re-seed from the latest backup if this deploy came up with an empty DB.
     auto_restore_on_startup()
@@ -119,15 +134,26 @@ if __name__ == "__main__":
     logger.info("✅ Admin Support Bot started")
     backup_proc.start()
     logger.info("✅ Backup Scheduler started")
-    logger.info("✅ API Server starting...")
-    logger.info("🎯 All services running!")
 
-    try:
-        run_api()
-    except KeyboardInterrupt:
-        logger.info("🛑 Shutting down...")
-    finally:
-        for proc in (game_proc, admin_proc, support_proc, admin_support_proc, backup_proc):
-            if proc.is_alive():
-                proc.terminate()
-                proc.join(timeout=5)
+    if os.getenv("RUN_API_WITH_BOTS", "false").lower() == "true":
+        logger.info("✅ API Server starting inside bot runner...")
+        try:
+            run_api()
+        except KeyboardInterrupt:
+            logger.info("🛑 Shutting down...")
+        finally:
+            for proc in (game_proc, admin_proc, support_proc, admin_support_proc, backup_proc):
+                if proc.is_alive():
+                    proc.terminate()
+                    proc.join(timeout=5)
+    else:
+        logger.info("✅ Bot Health Check Server starting on port %s...", os.environ.get("PORT", "8000"))
+        try:
+            run_health_check_server()
+        except KeyboardInterrupt:
+            logger.info("🛑 Shutting down...")
+        finally:
+            for proc in (game_proc, admin_proc, support_proc, admin_support_proc, backup_proc):
+                if proc.is_alive():
+                    proc.terminate()
+                    proc.join(timeout=5)
