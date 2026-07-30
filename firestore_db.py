@@ -83,7 +83,9 @@ class DocumentSnapshot:
         self.exists = exists
 
     def to_dict(self):
-        return self._data if self.exists else None
+        if not self.exists or self._data is None:
+            return None
+        return normalize_doc(self._data)
         
     def data(self):
         return self._data
@@ -443,18 +445,18 @@ class DocumentRef:
                     target = target[part]
 
                 last_part = parts[-1]
-                # Normalize any corrupt __type artifacts in the stored value
+                # Normalize any corrupt __type / _type artifacts in the stored value
                 curr_val = target.get(last_part)
-                if isinstance(curr_val, dict) and '__type' in curr_val:
+                if isinstance(curr_val, dict) and ('__type' in curr_val or '_type' in curr_val):
                     curr_val = curr_val.get('value', 0)
-                else:
-                    curr_val = curr_val or 0
-                # Convert serialized FieldValue objects from frontend JSON
-                if isinstance(v, dict) and v.get('__type') == 'increment':
-                    inc = Increment(v.get('value', 0))
-                    target[last_part] = curr_val + inc.value
+                elif not isinstance(curr_val, (int, float)):
+                    curr_val = 0
+                # Convert serialized FieldValue objects from REST/JSON
+                if isinstance(v, dict) and (v.get('__type') in ('increment', 'Increment') or v.get('_type') in ('increment', 'Increment')):
+                    inc_val = float(v.get('value', 0))
+                    target[last_part] = float(curr_val) + inc_val
                 elif isinstance(v, Increment):
-                    target[last_part] = curr_val + v.value
+                    target[last_part] = float(curr_val) + float(v.value)
                 elif isinstance(v, ArrayUnion):
                     lst = target.get(last_part, [])
                     if not isinstance(lst, list):
@@ -468,7 +470,7 @@ class DocumentRef:
                     if not isinstance(lst, list):
                         lst = []
                     target[last_part] = [x for x in lst if x not in v.values]
-                elif isinstance(v, dict) and v.get('__type') == 'serverTimestamp':
+                elif isinstance(v, dict) and (v.get('__type') == 'serverTimestamp' or v.get('_type') == 'serverTimestamp'):
                     target[last_part] = datetime.now(tz=timezone.utc).isoformat()
                 else:
                     target[last_part] = self._serialize_val(v)
@@ -552,10 +554,11 @@ class DocumentRef:
 # Whole-database export / import (used by the JSON backup workflow)
 # ═══════════════════════════════════════════════════════════════════
 def normalize_doc(data: dict) -> dict:
-    """Recursively fix any {__type: ..., value: ...} artifacts stored by old FieldValue mocks."""
+    """Recursively fix any {__type: ..., value: ...} or {_type: ..., value: ...} artifacts stored by old FieldValue mocks or REST payload."""
     if isinstance(data, dict):
-        if '__type' in data and 'value' in data:
-            return data['value']
+        if ('__type' in data or '_type' in data) and 'value' in data:
+            val = data['value']
+            return float(val) if isinstance(val, (int, float)) else val
         return {k: normalize_doc(v) for k, v in data.items()}
     if isinstance(data, list):
         return [normalize_doc(v) for v in data]
@@ -564,7 +567,7 @@ def normalize_doc(data: dict) -> dict:
 
 def fix_playwallet():
     """
-    Fix all user documents that have {__type: increment, value: N} stored
+    Fix all user documents that have {__type: increment, value: N} or {_type: Increment, value: N} stored
     instead of a plain number for play_wallet / balance / bonus fields.
     Safe to run multiple times — idempotent after the first run.
     """
@@ -579,8 +582,8 @@ def fix_playwallet():
             changed = False
             for key in ('play_wallet', 'balance', 'bonus'):
                 val = data.get(key)
-                if isinstance(val, dict) and '__type' in val:
-                    data[key] = val.get('value', 0)
+                if isinstance(val, dict) and ('__type' in val or '_type' in val):
+                    data[key] = float(val.get('value', 0))
                     changed = True
             if changed:
                 doc.data = json.dumps(data)

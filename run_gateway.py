@@ -24,6 +24,13 @@ if __name__ == "__main__":
 
     # Re-seed from the latest backup if this deploy came up with an empty DB.
     auto_restore_on_startup()
+    try:
+        import firestore_db
+        fixed_cnt = firestore_db.fix_playwallet()
+        if fixed_cnt:
+            logger.info(f"🧹 Cleaned {fixed_cnt} user wallet records containing Increment dicts.")
+    except Exception as e:
+        logger.warning(f"Wallet cleanup error: {e}")
 
     from api.admin_api import socket_app as app
     port = int(os.environ.get("PORT", 8000))

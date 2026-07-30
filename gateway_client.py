@@ -19,11 +19,22 @@ import requests
 logger = logging.getLogger(__name__)
 
 
+def normalize_doc(data):
+    if isinstance(data, dict):
+        if ('__type' in data or '_type' in data) and 'value' in data:
+            val = data['value']
+            return float(val) if isinstance(val, (int, float)) else val
+        return {k: normalize_doc(v) for k, v in data.items()}
+    if isinstance(data, list):
+        return [normalize_doc(v) for v in data]
+    return data
+
+
 # ── Snapshot ──────────────────────────────────────────────────────
 class GatewayDocSnapshot:
     def __init__(self, doc_id: str, data: dict, exists: bool = True):
         self.id = str(doc_id)
-        self._data = data or {}
+        self._data = normalize_doc(data or {})
         self.exists = exists
 
     def to_dict(self):

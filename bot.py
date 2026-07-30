@@ -1071,20 +1071,20 @@ def main():
     app.add_handler(CommandHandler("stats", handle_stats))
 
     # ─── Simple menu handlers (no conversation needed) ───
-    app.add_handler(MessageHandler(filters.Regex("^💵 Check Balance$"), handle_balance))
-    app.add_handler(MessageHandler(filters.Regex("^🔗 Invite$"), handle_invite))
-    app.add_handler(MessageHandler(filters.Regex("^📖 Instruction$"), handle_instruction))
-    app.add_handler(MessageHandler(filters.Regex("^🆘 Contact Support$"), handle_support))
+    app.add_handler(MessageHandler(filters.Regex("(?i).*(balance).*"), handle_balance))
+    app.add_handler(MessageHandler(filters.Regex("(?i).*(invite).*"), handle_invite))
+    app.add_handler(MessageHandler(filters.Regex("(?i).*(instruction|help).*"), handle_instruction))
+    app.add_handler(MessageHandler(filters.Regex("(?i).*(support|contact).*"), handle_support))
 
     # ─── Play handler (no conversation — just opens webapp) ───
-    app.add_handler(MessageHandler(filters.Regex("^🎮 Play$"), handle_play))
+    app.add_handler(MessageHandler(filters.Regex("(?i).*(play).*"), handle_play))
     app.add_handler(CallbackQueryHandler(handle_play, pattern="^menu_play$"))
 
     # ─── ConversationHandler: Register ───
     reg_conv = ConversationHandler(
         entry_points=[
             CommandHandler("register", handle_register),
-            MessageHandler(filters.Regex("^📝 Register$"), handle_register),
+            MessageHandler(filters.Regex("(?i).*(register).*"), handle_register),
             CallbackQueryHandler(handle_register, pattern="^menu_register$"),
         ],
         per_message=False,
@@ -1100,9 +1100,8 @@ def main():
     deposit_conv = ConversationHandler(
         entry_points=[
             CommandHandler("deposit", handle_deposit),
-            MessageHandler(filters.Regex("^💵 Deposit$"), handle_deposit),
-            CallbackQueryHandler(handle_deposit, pattern="^menu_deposit$"),
-            CallbackQueryHandler(handle_deposit, pattern="^bal_deposit$"),
+            MessageHandler(filters.Regex("(?i).*(deposit).*"), handle_deposit),
+            CallbackQueryHandler(handle_deposit, pattern="^(menu_deposit|bal_deposit)$"),
         ],
         per_message=False,
         states={
@@ -1113,8 +1112,7 @@ def main():
         fallbacks=[
             CommandHandler("start", start),
             MessageHandler(filters.Regex("^Cancel$"), cancel),
-            CallbackQueryHandler(handle_deposit, pattern="^menu_deposit$"),
-            CallbackQueryHandler(handle_deposit, pattern="^bal_deposit$"),
+            CallbackQueryHandler(handle_deposit, pattern="^(menu_deposit|bal_deposit)$"),
         ],
     )
     app.add_handler(deposit_conv, group=3)
@@ -1123,9 +1121,8 @@ def main():
     withdraw_conv = ConversationHandler(
         entry_points=[
             CommandHandler("withdraw", handle_withdraw),
-            MessageHandler(filters.Regex("^🎰 Withdraw$"), handle_withdraw),
-            CallbackQueryHandler(handle_withdraw, pattern="^menu_withdraw$"),
-            CallbackQueryHandler(handle_withdraw, pattern="^bal_withdraw$"),
+            MessageHandler(filters.Regex("(?i).*(withdraw).*"), handle_withdraw),
+            CallbackQueryHandler(handle_withdraw, pattern="^(menu_withdraw|bal_withdraw)$"),
         ],
         per_message=False,
         states={
@@ -1135,15 +1132,18 @@ def main():
         fallbacks=[
             CommandHandler("start", start),
             MessageHandler(filters.Regex("^Cancel$"), cancel),
-            CallbackQueryHandler(handle_withdraw, pattern="^menu_withdraw$"),
-            CallbackQueryHandler(handle_withdraw, pattern="^bal_withdraw$"),
+            CallbackQueryHandler(handle_withdraw, pattern="^(menu_withdraw|bal_withdraw)$"),
         ],
     )
     app.add_handler(withdraw_conv, group=4)
 
     # ─── ConversationHandler: Transfer ───
     transfer_conv = ConversationHandler(
-        entry_points=[CommandHandler("transfer", handle_transfer), MessageHandler(filters.Regex("^🎁 Transfer$"), handle_transfer), CallbackQueryHandler(handle_transfer, pattern="^menu_transfer$")],
+        entry_points=[
+            CommandHandler("transfer", handle_transfer),
+            MessageHandler(filters.Regex("(?i).*(transfer).*"), handle_transfer),
+            CallbackQueryHandler(handle_transfer, pattern="^menu_transfer$")
+        ],
         per_message=False,
         states={
             TRANSFER_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, transfer_id)],
@@ -1156,7 +1156,11 @@ def main():
 
     # ─── ConversationHandler: Convert Bonus ───
     bonus_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^🔄 Convert Bonus$"), handle_convert_bonus), CallbackQueryHandler(handle_convert_bonus, pattern="^menu_bonus$")],
+        entry_points=[
+            CommandHandler("bonus", handle_convert_bonus),
+            MessageHandler(filters.Regex("(?i).*(bonus).*"), handle_convert_bonus),
+            CallbackQueryHandler(handle_convert_bonus, pattern="^menu_bonus$")
+        ],
         per_message=False,
         states={
             BONUS_CONFIRM: [CallbackQueryHandler(bonus_confirm, pattern="^bonus_")],

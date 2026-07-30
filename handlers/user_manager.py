@@ -267,10 +267,27 @@ class UserManager:
         if not user:
             return None
         pw = user.get('play_wallet', 0)
+        if isinstance(pw, dict) and ('__type' in pw or '_type' in pw):
+            pw = float(pw.get('value', 0))
+        else:
+            try:
+                pw = float(pw or 0)
+            except Exception:
+                pw = 0.0
+
+        bonus = user.get('bonus', 0)
+        if isinstance(bonus, dict) and ('__type' in bonus or '_type' in bonus):
+            bonus = float(bonus.get('value', 0))
+        else:
+            try:
+                bonus = float(bonus or 0)
+            except Exception:
+                bonus = 0.0
+
         return {
             'balance': pw,
             'play_wallet': pw,
-            'bonus': user.get('bonus', 0),
+            'bonus': bonus,
             'first_name': user.get('first_name', ''),
         }
 
