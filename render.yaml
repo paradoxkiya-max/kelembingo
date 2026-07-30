@@ -10,6 +10,8 @@ services:
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
+      - key: RENDER_API_ONLY
+        value: "true"
       - key: BACKUP_INTERVAL_MINUTES
         value: "1"
       - key: INTERNAL_API_KEY
@@ -29,7 +31,7 @@ services:
     plan: free
     dockerfilePath: ./Dockerfile.bot
     dockerContext: .
-    healthCheckPath: /api/health
+    healthCheckPath: /
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"

@@ -700,6 +700,129 @@ class TestPerformance(unittest.TestCase):
         print(f"\n[Perf] 30 calls, 20 players × 2 cartelas: {elapsed:.3f}s ({elapsed/30*1000:.1f}ms/call)")
 
 
+class Test300PlayerScale(unittest.TestCase):
+    """Stress test engine performance & memory for 300 players across 2 simultaneous stakes."""
+
+    def test_300_players_two_stakes_under_200mb(self):
+        import tracemalloc
+        tracemalloc.start()
+        snapshot_before = tracemalloc.take_snapshot()
+
+        engine = RoundEngine(Mock())
+
+        # Stake A (10 ETB): 150 players x 2 cartelas = 300 cartelas
+        stake_a_pc = {}
+        for i in range(150):
+            uid = f'user_stake10_{i}'
+            entries = []
+            for j in range(2):
+                flat = random.choice(CARTELA_POOL)
+                entries.append({
+                    'cartela_number': j + 1,
+                    'flat': flat,
+                    'patterns': engine.get_cartela_patterns(flat),
+                })
+            stake_a_pc[uid] = entries
+
+        # Stake B (20 ETB): 150 players x 2 cartelas = 300 cartelas
+        stake_b_pc = {}
+        for i in range(150):
+            uid = f'user_stake20_{i}'
+            entries = []
+            for j in range(2):
+                flat = random.choice(CARTELA_POOL)
+                entries.append({
+                    'cartela_number': j + 1,
+                    'flat': flat,
+                    'patterns': engine.get_cartela_patterns(flat),
+                })
+            stake_b_pc[uid] = entries
+
+        start_time = time.perf_counter()
+
+        # Run 30 calls for both rounds in parallel
+        for pc in (stake_a_pc, stake_b_pc):
+            called_set = set()
+            called = []
+            game_target = random.randint(15, 20)
+            target_winner = engine._select_predetermined_winner(pc)
+            winning_pattern = set(target_winner['pattern']) if target_winner else set()
+
+            for call_idx in range(1, 31):
+                available = [n for n in BINGO_NUMBERS if n not in called_set]
+                if not available:
+                    break
+                if call_idx < game_target:
+                    random.shuffle(available)
+                    chosen = None
+                    if target_winner and len(winning_pattern - called_set) > 1:
+                        for candidate in available:
+                            if candidate in winning_pattern:
+                                sim_set = called_set | {candidate}
+                                safe = True
+                                for uid, entries in pc.items():
+                                    if not safe:
+                                        break
+                                    for entry in entries:
+                                        if engine._has_winner(engine._entry_patterns(entry), sim_set):
+                                            safe = False
+                                            break
+                                if safe:
+                                    chosen = candidate
+                                    break
+                    if chosen is None:
+                        for candidate in available:
+                            sim_set = called_set | {candidate}
+                            safe = True
+                            for uid, entries in pc.items():
+                                if not safe:
+                                    break
+                                for entry in entries:
+                                    if engine._has_winner(engine._entry_patterns(entry), sim_set):
+                                        safe = False
+                                        break
+                            if safe:
+                                chosen = candidate
+                                break
+                    if chosen is None:
+                        chosen = available[0]
+                else:
+                    picked = None
+                    if target_winner:
+                        for n in target_winner.get('pattern', []):
+                            if n not in called_set:
+                                picked = n
+                                break
+                    if picked is not None:
+                        chosen = picked
+                    else:
+                        random.shuffle(available)
+                        chosen = available[0]
+                called.append(chosen)
+                called_set.add(chosen)
+
+                winners = engine.evaluate_winners(pc, called)
+                if winners:
+                    break
+
+        elapsed = time.perf_counter() - start_time
+        snapshot_after = tracemalloc.take_snapshot()
+        top_stats = snapshot_after.compare_to(snapshot_before, 'lineno')
+
+        total_allocated_mb = sum(stat.size_diff for stat in top_stats) / (1024 * 1024)
+        current_ram_mb, peak_ram_mb = [x / (1024 * 1024) for x in tracemalloc.get_traced_memory()]
+        tracemalloc.stop()
+
+        print(f"\n[300 Players Scale Test] Executed 2 simultaneous rounds (150 players/stake x 2 cartelas = 600 total cartelas)")
+        print(f"  Total Time: {elapsed:.3f}s")
+        print(f"  Peak Traced Memory: {peak_ram_mb:.2f} MB (Allocated Diff: {total_allocated_mb:.2f} MB)")
+
+        # Assert memory stays well below 200 MB
+        self.assertLess(peak_ram_mb, 200.0, f"Peak memory {peak_ram_mb:.2f}MB exceeded 200MB limit!")
+        # Assert execution time is fast enough for 60 total call evaluations
+        self.assertLess(elapsed, 5.0, f"Execution time {elapsed:.2f}s exceeded 5s limit for 300 players!")
+
+
 if __name__ == '__main__':
     suite = unittest.TestLoader().loadTestsFromModule(sys.modules[__name__])
     runner = unittest.TextTestRunner(verbosity=2)
