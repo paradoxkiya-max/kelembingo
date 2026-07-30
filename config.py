@@ -41,8 +41,13 @@ if BOT_TOKEN and ADMIN_BOT_TOKEN and BOT_TOKEN.strip() == ADMIN_BOT_TOKEN.strip(
     logger.error("Please create two distinct bots via @BotFather and assign them separately.")
     logger.error("=" * 80)
 
-db = firestore_db.MockFirestoreClient()
-logger.info("SQL database emulator initialized successfully")
+if os.getenv("USE_GATEWAY", "false").lower() == "true":
+    from gateway_client import GatewayClient
+    db = GatewayClient()
+    logger.info(f"🌐 Remote Gateway DB client initialized -> {db.gateway_url}")
+else:
+    db = firestore_db.MockFirestoreClient()
+    logger.info("SQL database emulator initialized successfully")
 
 
 DEFAULT_STAKE_10 = int(os.getenv("DEFAULT_STAKE_10", 10))

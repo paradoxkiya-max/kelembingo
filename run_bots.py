@@ -133,12 +133,10 @@ if __name__ == "__main__":
     admin_support_proc.start()
     logger.info("✅ Admin Support Bot started")
     backup_proc.start()
-    logger.info("✅ Backup Scheduler started")
-
-    if os.getenv("RUN_API_WITH_BOTS", "false").lower() == "true":
-        logger.info("✅ API Server starting inside bot runner...")
+    if os.getenv("USE_GATEWAY", "false").lower() == "true":
+        logger.info("🌐 Dedicated Bot Service running with Gateway bridge (port %s)...", os.environ.get("PORT", "8000"))
         try:
-            run_api()
+            run_health_check_server()
         except KeyboardInterrupt:
             logger.info("🛑 Shutting down...")
         finally:
@@ -147,9 +145,9 @@ if __name__ == "__main__":
                     proc.terminate()
                     proc.join(timeout=5)
     else:
-        logger.info("✅ Bot Health Check Server starting on port %s...", os.environ.get("PORT", "8000"))
+        logger.info("✅ Starting API Server and Game Loop...")
         try:
-            run_health_check_server()
+            run_api()
         except KeyboardInterrupt:
             logger.info("🛑 Shutting down...")
         finally:
