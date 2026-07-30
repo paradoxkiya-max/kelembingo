@@ -69,6 +69,15 @@ def run_backup_scheduler():
     time.sleep(5)
     while True:
         try:
+            # Keep-Alive ping to keep Gateway awake 24/7 on Render Free Tier
+            gw_url = os.getenv("GATEWAY_URL")
+            if gw_url:
+                try:
+                    import requests
+                    requests.get(f"{gw_url.rstrip('/')}/api/health", timeout=5)
+                except Exception:
+                    pass
+
             if firestore_db.count_documents() > 0:
                 meta = bc.create_backup()
                 logger.info(f"Auto-backup: {meta.get('documents')} records saved.")

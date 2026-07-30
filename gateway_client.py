@@ -141,10 +141,13 @@ class GatewayCollectionRef:
             h["X-Internal-Key"] = self.api_key
         return h
 
-    def document(self, doc_id: str):
+    def document(self, doc_id: str = None):
+        if not doc_id:
+            import uuid
+            doc_id = str(uuid.uuid4())
         return GatewayDocRef(self.collection, str(doc_id), self.gateway_url, self.api_key)
 
-    def doc(self, doc_id: str):
+    def doc(self, doc_id: str = None):
         return self.document(doc_id)
 
     # ── Chaining (immutable — each returns a NEW ref) ─────────────

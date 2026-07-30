@@ -28,6 +28,9 @@ if "sqlite" in DATABASE_URL:
     with engine.begin() as conn:
         conn.execute(sqlalchemy.text("PRAGMA journal_mode=WAL"))
         conn.execute(sqlalchemy.text("PRAGMA busy_timeout=30000"))
+        conn.execute(sqlalchemy.text("PRAGMA synchronous=NORMAL"))
+        conn.execute(sqlalchemy.text("PRAGMA temp_store=MEMORY"))
+        conn.execute(sqlalchemy.text("PRAGMA cache_size=-64000"))
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
