@@ -25,14 +25,10 @@ from config import db
 
 logger = logging.getLogger(__name__)
 
-# ── Hard-coded bot tokens (as requested) ──────────────────────────────
-# User support bot -> t.me/kelemsupportbot
-SUPPORT_BOT_TOKEN = "8967029076:AAG2Pk0_dV6FfWR1fNI9-65uROnMKMjIAzs"
-# Admin support bot -> t.me/kelemadminsupportbot
-ADMIN_SUPPORT_BOT_TOKEN = "8776808782:AAHmKkv5Buzrb8ch2S1A_F7voGqXdGyJkv0"
-
-# Admin telegram id comes from the environment (never exposed to users).
 import os
+
+SUPPORT_BOT_TOKEN = os.getenv("SUPPORT_BOT_TOKEN", "8967029076:AAG2Pk0_dV6FfWR1fNI9-65uROnMKMjIAzs")
+ADMIN_SUPPORT_BOT_TOKEN = os.getenv("ADMIN_SUPPORT_BOT_TOKEN", "8776808782:AAHmKkv5Buzrb8ch2S1A_F7voGqXdGyJkv0")
 
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 
