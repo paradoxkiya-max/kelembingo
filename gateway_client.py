@@ -70,6 +70,22 @@ class GatewayTransaction:
         return ref.set(data, merge=merge)
 
 
+def _prepare_data_for_json(data):
+    if not isinstance(data, dict):
+        return data
+    cleaned = {}
+    for k, v in data.items():
+        if hasattr(v, 'value') and type(v).__name__ == 'Increment':
+            cleaned[k] = {"_type": "Increment", "value": v.value}
+        elif hasattr(v, 'isoformat'):
+            cleaned[k] = v.isoformat()
+        elif isinstance(v, dict):
+            cleaned[k] = _prepare_data_for_json(v)
+        else:
+            cleaned[k] = v
+    return cleaned
+
+
 # ── Document Reference ───────────────────────────────────────────
 class GatewayDocRef:
     def __init__(self, collection: str, doc_id: str, gateway_url: str, api_key: str = ""):
@@ -102,7 +118,8 @@ class GatewayDocRef:
     def set(self, data, merge=False):
         url = f"{self.gateway_url}/api/db/{self.collection}/{self.id}"
         try:
-            r = requests.post(url, json={"data": data, "merge": merge}, headers=self._headers(), timeout=10)
+            payload_data = _prepare_data_for_json(data)
+            r = requests.post(url, json={"data": payload_data, "merge": merge}, headers=self._headers(), timeout=10)
             r.raise_for_status()
         except Exception as e:
             logger.error(f"GatewayDocRef.set {self.collection}/{self.id}: {e}")
@@ -110,7 +127,8 @@ class GatewayDocRef:
     def update(self, data):
         url = f"{self.gateway_url}/api/db/{self.collection}/{self.id}"
         try:
-            r = requests.patch(url, json={"data": data}, headers=self._headers(), timeout=10)
+            payload_data = _prepare_data_for_json(data)
+            r = requests.patch(url, json={"data": payload_data}, headers=self._headers(), timeout=10)
             r.raise_for_status()
         except Exception as e:
             logger.error(f"GatewayDocRef.update {self.collection}/{self.id}: {e}")

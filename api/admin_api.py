@@ -1586,6 +1586,99 @@ def _fetch_events(last_id: str):
         sess.close()
 
 
+# ─── Remote Database Bridge Endpoints for GatewayClient ───
+def _serialize_db_dict(obj):
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: _serialize_db_dict(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_serialize_db_dict(i) for i in obj]
+    return obj
+
+
+@app.get("/api/db/{collection}/{doc_id}")
+async def gateway_db_get_doc(collection: str, doc_id: str):
+    def _sync():
+        ref = db.collection(collection).document(doc_id)
+        snap = ref.get()
+        if snap.exists:
+            return {"id": snap.id, "data": _serialize_db_dict(snap.to_dict()), "exists": True}
+        return None
+    res = await asyncio.to_thread(_sync)
+    if res is None:
+        return Response(status_code=404, content=json.dumps({"exists": False}), media_type="application/json")
+    return JSONResponse(res)
+
+
+@app.post("/api/db/{collection}/{doc_id}")
+async def gateway_db_set_doc(collection: str, doc_id: str, payload: dict = Body(...)):
+    def _sync():
+        data = payload.get("data", {})
+        merge = payload.get("merge", False)
+        # Parse ISO datetimes if present in payload
+        ref = db.collection(collection).document(doc_id)
+        ref.set(data, merge=merge)
+        return {"status": "ok"}
+    await asyncio.to_thread(_sync)
+    return {"status": "ok"}
+
+
+@app.patch("/api/db/{collection}/{doc_id}")
+async def gateway_db_update_doc(collection: str, doc_id: str, payload: dict = Body(...)):
+    def _sync():
+        data = payload.get("data", {})
+        ref = db.collection(collection).document(doc_id)
+        # Handle special Increment field operations if passed as dict
+        parsed_data = {}
+        for k, v in data.items():
+            if isinstance(v, dict) and v.get("_type") == "Increment":
+                parsed_data[k] = firestore.Increment(v.get("value", 0))
+            else:
+                parsed_data[k] = v
+        ref.update(parsed_data)
+        return {"status": "ok"}
+    await asyncio.to_thread(_sync)
+    return {"status": "ok"}
+
+
+@app.delete("/api/db/{collection}/{doc_id}")
+async def gateway_db_delete_doc(collection: str, doc_id: str):
+    def _sync():
+        ref = db.collection(collection).document(doc_id)
+        ref.delete()
+    await asyncio.to_thread(_sync)
+    return {"status": "ok"}
+
+
+@app.get("/api/db/{collection}")
+async def gateway_db_query_collection(
+    collection: str,
+    filters: Optional[str] = None,
+    order_by: Optional[str] = None,
+    order_dir: Optional[str] = "ASCENDING",
+    limit_n: Optional[int] = None
+):
+    def _sync():
+        ref = db.collection(collection)
+        if filters:
+            try:
+                flist = json.loads(filters)
+                for f in flist:
+                    if len(f) == 3:
+                        ref = ref.where(f[0], f[1], f[2])
+            except Exception as e:
+                logger.warning(f"Error parsing query filters: {e}")
+        if order_by:
+            ref = ref.order_by(order_by, order_dir)
+        if limit_n:
+            ref = ref.limit(limit_n)
+        docs = list(ref.get())
+        return [{"id": d.id, "data": _serialize_db_dict(d.to_dict())} for d in docs]
+    res = await asyncio.to_thread(_sync)
+    return JSONResponse(res)
+
+
 # (startup merged into start_background_monitor above)
 
 
