@@ -220,10 +220,11 @@ async def _game_loop(round_id: str):
                 if dl_dt.tzinfo is None:
                     dl_dt = dl_dt.replace(tzinfo=timezone.utc)
                 
-                # Give an extra 5 seconds grace period for large batches of queued auto-join HTTP requests to finish executing
-                if datetime.now(tz=timezone.utc) >= dl_dt + timedelta(seconds=5):
-                    # Timer expired — start game if players exist
+                # Selection deadline reached — start game if players exist, otherwise complete round immediately
+                if datetime.now(tz=timezone.utc) >= dl_dt:
                     player_count = data.get('player_count', 0)
+                    if isinstance(player_count, dict):
+                        player_count = player_count.get('value', 0)
                     if player_count > 0:
                         now = datetime.now(tz=timezone.utc)
                         round_stake = data.get('stake', DEFAULT_STAKE)
@@ -239,32 +240,7 @@ async def _game_loop(round_id: str):
                         await broadcast_event('rounds', round_id)
                         break
                     else:
-                        # Grace period: wait 5s for late joins before cancelling
-                        await asyncio.sleep(5)
-                        recheck = await _db(lambda: db.collection('rounds').document(round_id).get())
-                        if not recheck.exists:
-                            return
-                        recheck_data = recheck.to_dict()
-                        if recheck_data.get('status') != 'selecting':
-                            # Status changed (e.g. player joined via transaction), re-enter loop
-                            continue
-                        recheck_pc = recheck_data.get('player_count', 0)
-                        if recheck_pc > 0:
-                            # Player joined during grace period — start the game
-                            now = datetime.now(tz=timezone.utc)
-                            round_stake = recheck_data.get('stake', DEFAULT_STAKE)
-                            total_pool = recheck_pc * round_stake
-                            derash = total_pool * 0.75
-                            await _db(lambda: db.collection('rounds').document(round_id).update({
-                                'status': 'playing',
-                                'derash': derash,
-                                'game_started_at': now,
-                                'next_number_at': now + timedelta(seconds=NUMBER_CALL_INTERVAL),
-                                'pending_selections': {},
-                            }))
-                            await broadcast_event('rounds', round_id)
-                            break
-                        # Still no players — cancel
+                        # No players joined — complete round immediately without grace delay
                         await _db(lambda: db.collection('rounds').document(round_id).update({
                             'status': 'completed',
                             'winners': [],

@@ -454,9 +454,11 @@ class DocumentRef:
                 # Convert serialized FieldValue objects from REST/JSON
                 if isinstance(v, dict) and (v.get('__type') in ('increment', 'Increment') or v.get('_type') in ('increment', 'Increment')):
                     inc_val = float(v.get('value', 0))
-                    target[last_part] = float(curr_val) + inc_val
+                    res_val = float(curr_val) + inc_val
+                    target[last_part] = int(res_val) if res_val.is_integer() else res_val
                 elif isinstance(v, Increment):
-                    target[last_part] = float(curr_val) + float(v.value)
+                    res_val = float(curr_val) + float(v.value)
+                    target[last_part] = int(res_val) if res_val.is_integer() else res_val
                 elif isinstance(v, ArrayUnion):
                     lst = target.get(last_part, [])
                     if not isinstance(lst, list):

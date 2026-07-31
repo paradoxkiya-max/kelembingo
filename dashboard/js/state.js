@@ -19,7 +19,14 @@ var isSpectator = false;
 var _lastKnownPlayerCount = 0;
 var serverTimeOffset = 0;
 
-var SELECTION_DURATION = 35; // seconds for card selection phase
+var SELECTION_DURATION = 45; // seconds for card selection phase
+
+function parsePlayerCount(val) {
+    if (typeof val === 'object' && val !== null) {
+        return Number(val.value || 0);
+    }
+    return Number(val || 0);
+}
 
 function serverNow() {
     return Date.now() + serverTimeOffset;

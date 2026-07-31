@@ -40,6 +40,14 @@ def run_admin_support_bot():
         logger.error(f"Admin support bot error: {e}", exc_info=True)
 
 
+def run_admin_talk_bot():
+    try:
+        from admin_talk_bot import main
+        main()
+    except Exception as e:
+        logger.error(f"Admin talk bot error: {e}", exc_info=True)
+
+
 def run_api():
     try:
         import uvicorn
@@ -131,6 +139,7 @@ if __name__ == "__main__":
     admin_proc = multiprocessing.Process(target=run_admin_bot, name="AdminBot")
     support_proc = multiprocessing.Process(target=run_support_bot, name="SupportBot")
     admin_support_proc = multiprocessing.Process(target=run_admin_support_bot, name="AdminSupportBot")
+    admin_talk_proc = multiprocessing.Process(target=run_admin_talk_bot, name="AdminTalkBot")
     backup_proc = multiprocessing.Process(target=run_backup_scheduler, name="BackupScheduler")
 
     game_proc.start()
@@ -141,6 +150,8 @@ if __name__ == "__main__":
     logger.info("✅ Support Bot started")
     admin_support_proc.start()
     logger.info("✅ Admin Support Bot started")
+    admin_talk_proc.start()
+    logger.info("✅ Admin Talk Bot started")
     backup_proc.start()
     if os.getenv("USE_GATEWAY", "false").lower() == "true":
         logger.info("🌐 Dedicated Bot Service running with Gateway bridge (port %s)...", os.environ.get("PORT", "8000"))
@@ -149,7 +160,7 @@ if __name__ == "__main__":
         except KeyboardInterrupt:
             logger.info("🛑 Shutting down...")
         finally:
-            for proc in (game_proc, admin_proc, support_proc, admin_support_proc, backup_proc):
+            for proc in (game_proc, admin_proc, support_proc, admin_support_proc, admin_talk_proc, backup_proc):
                 if proc.is_alive():
                     proc.terminate()
                     proc.join(timeout=5)
@@ -160,7 +171,7 @@ if __name__ == "__main__":
         except KeyboardInterrupt:
             logger.info("🛑 Shutting down...")
         finally:
-            for proc in (game_proc, admin_proc, support_proc, admin_support_proc, backup_proc):
+            for proc in (game_proc, admin_proc, support_proc, admin_support_proc, admin_talk_proc, backup_proc):
                 if proc.is_alive():
                     proc.terminate()
                     proc.join(timeout=5)

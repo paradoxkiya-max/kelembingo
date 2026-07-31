@@ -51,4 +51,6 @@ services:
         value: 8801537534:AAEi3UflU4TRCJ10TRlqxMSAF3l7RS4-vYc
       - key: ADMIN_CHAT_ID
         value: "8462274722"
+      - key: ADMIN_TALK_BOT_TOKEN
+        value: your_admin_talk_bot_token_here
     autoDeploy: true

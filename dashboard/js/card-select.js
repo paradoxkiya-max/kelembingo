@@ -69,7 +69,7 @@ async function playNow(stake) {
 
         // Already playing — check if user is a player
         if (roundData.status === 'playing') {
-            var pc = roundData.player_count || 0;
+            var pc = parsePlayerCount(roundData.player_count);
             if (pc <= 0) {
                 // 0-player round in playing state — cancel and restart
                 db.collection('rounds').doc(roundId).update({
@@ -132,7 +132,7 @@ async function playNow(stake) {
             else if (typeof deadline === 'object' && deadline.seconds) dlMs = deadline.seconds * 1000;
             else dlMs = new Date(deadline).getTime();
             if (!isNaN(dlMs) && serverNow() >= dlMs) {
-                var pc = roundData.player_count || 0;
+                var pc = parsePlayerCount(roundData.player_count);
                 if (pc > 0) {
                     isSpectator = true;
                     await navigateTo('game');
@@ -175,7 +175,7 @@ async function showCardSelection(roundId, roundData) {
     listenerReady = false;
     updateSelectedInfo();
 
-    var playerCount = roundData.player_count || 0;
+    var playerCount = parsePlayerCount(roundData.player_count);
     _lastKnownPlayerCount = playerCount;
     _lastPendingSelections = roundData.pending_selections || {};
     var totalPending = countTotalPendingSelections(_lastPendingSelections);
@@ -297,7 +297,7 @@ async function showCardSelection(roundId, roundData) {
                 listenerReady = true;
             }
 
-            var livePlayerCount = rd.player_count || 0;
+            var livePlayerCount = parsePlayerCount(rd.player_count);
             _lastKnownPlayerCount = livePlayerCount;
             _lastPendingSelections = rd.pending_selections || {};
             var liveTotalPending = countTotalPendingSelections(_lastPendingSelections);
@@ -323,7 +323,7 @@ async function showCardSelection(roundId, roundData) {
             if (rd.status === 'playing') {
                 var cs = document.getElementById('card-select-screen');
                 if (cs && cs.classList.contains('hidden')) return;
-                var livePC = rd.player_count || 0;
+                var livePC = parsePlayerCount(rd.player_count);
                 if (livePC <= 0) {
                     // 0-player round started playing — cancel and restart
                     if (roundUnsubscribe) { roundUnsubscribe(); roundUnsubscribe = null; }
@@ -369,7 +369,7 @@ async function showCardSelection(roundId, roundData) {
             _cartelaPoolHandler = function(msg) {
                 if (msg.round_id !== roundId) return;
                 _updateCartelaGrid(msg.taken_cartelas, msg.pending_selections, grid);
-                var livePC = msg.player_count || 0;
+                var livePC = parsePlayerCount(msg.player_count);
                 _lastKnownPlayerCount = livePC;
                 _lastPendingSelections = msg.pending_selections || {};
                 var livePoolPending = countTotalPendingSelections(_lastPendingSelections);
