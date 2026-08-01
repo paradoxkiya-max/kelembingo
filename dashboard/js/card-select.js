@@ -69,7 +69,7 @@ async function playNow(stake) {
 
         // Already playing — check if user is a player
         if (roundData.status === 'playing') {
-            var pc = parsePlayerCount(roundData.player_count);
+            var pc = roundData.player_count || 0;
             if (pc <= 0) {
                 // 0-player round in playing state — cancel and restart
                 db.collection('rounds').doc(roundId).update({
@@ -132,7 +132,7 @@ async function playNow(stake) {
             else if (typeof deadline === 'object' && deadline.seconds) dlMs = deadline.seconds * 1000;
             else dlMs = new Date(deadline).getTime();
             if (!isNaN(dlMs) && serverNow() >= dlMs) {
-                var pc = parsePlayerCount(roundData.player_count);
+                var pc = roundData.player_count || 0;
                 if (pc > 0) {
                     isSpectator = true;
                     await navigateTo('game');
@@ -175,7 +175,7 @@ async function showCardSelection(roundId, roundData) {
     listenerReady = false;
     updateSelectedInfo();
 
-    var playerCount = parsePlayerCount(roundData.player_count);
+    var playerCount = roundData.player_count || 0;
     _lastKnownPlayerCount = playerCount;
     _lastPendingSelections = roundData.pending_selections || {};
     var totalPending = countTotalPendingSelections(_lastPendingSelections);
@@ -212,21 +212,9 @@ async function showCardSelection(roundId, roundData) {
     if (grid) grid.innerHTML = '<div class="col-span-8 text-center py-8"><div class="text-3xl mb-2 float-anim">🃏</div><p class="text-white/50 text-sm">Loading cartelas...</p></div>';
 
     try {
-        var masterSnap;
-        try {
-            masterSnap = await db.collection('cartelas_master').orderBy('number').get();
-        } catch (e1) {
-            masterSnap = await db.collection('cartelas_master').get();
-        }
-        if (!masterSnap || masterSnap.empty) {
-            try {
-                var apiBase = window.BACKEND_URL || window.API_BASE || window.location.origin || (window.location.protocol + '//' + window.location.host);
-                await fetch(apiBase + '/api/cartelas/generate', { method: 'POST' });
-                masterSnap = await db.collection('cartelas_master').get();
-            } catch(genErr) {}
-        }
-        if (!masterSnap || masterSnap.empty) {
-            if (grid) grid.innerHTML = '<div class="col-span-8 text-center py-12 px-4"><div class="text-4xl mb-3">😓</div><p class="text-white/80 text-sm font-bold mb-1">No Cards Available</p><p class="text-white/40 text-xs mb-3">Generating cartelas on server...</p><button onclick="playNow(currentStake)" class="btn-gradient px-4 py-2 text-xs rounded-lg text-white font-bold">Retry</button></div>';
+        var masterSnap = await db.collection('cartelas_master').orderBy('number').get();
+        if (masterSnap.empty) {
+            if (grid) grid.innerHTML = '<div class="col-span-8 text-center py-12 px-4"><div class="text-4xl mb-3">😓</div><p class="text-white/80 text-sm font-bold mb-1">No Cards Generated</p><p class="text-white/40 text-xs">Admin needs to generate cartelas first.</p></div>';
             return;
         }
 
@@ -242,17 +230,8 @@ async function showCardSelection(roundId, roundData) {
             }
         });
 
-        // Convert query snapshot to array and sort numerically 1..500
-        var docsArr = [];
-        masterSnap.forEach(function(doc) { docsArr.push(doc); });
-        docsArr.sort(function(a, b) {
-            var na = parseInt(a.data().number) || 0;
-            var nb = parseInt(b.data().number) || 0;
-            return na - nb;
-        });
-
         if (grid) grid.innerHTML = '';
-        docsArr.forEach(function(doc) {
+        masterSnap.forEach(function(doc) {
             var d = doc.data();
             var num = d.number;
             var cell = document.createElement('div');
@@ -318,7 +297,7 @@ async function showCardSelection(roundId, roundData) {
                 listenerReady = true;
             }
 
-            var livePlayerCount = parsePlayerCount(rd.player_count);
+            var livePlayerCount = rd.player_count || 0;
             _lastKnownPlayerCount = livePlayerCount;
             _lastPendingSelections = rd.pending_selections || {};
             var liveTotalPending = countTotalPendingSelections(_lastPendingSelections);
@@ -344,7 +323,7 @@ async function showCardSelection(roundId, roundData) {
             if (rd.status === 'playing') {
                 var cs = document.getElementById('card-select-screen');
                 if (cs && cs.classList.contains('hidden')) return;
-                var livePC = parsePlayerCount(rd.player_count);
+                var livePC = rd.player_count || 0;
                 if (livePC <= 0) {
                     // 0-player round started playing — cancel and restart
                     if (roundUnsubscribe) { roundUnsubscribe(); roundUnsubscribe = null; }
@@ -390,7 +369,7 @@ async function showCardSelection(roundId, roundData) {
             _cartelaPoolHandler = function(msg) {
                 if (msg.round_id !== roundId) return;
                 _updateCartelaGrid(msg.taken_cartelas, msg.pending_selections, grid);
-                var livePC = parsePlayerCount(msg.player_count);
+                var livePC = msg.player_count || 0;
                 _lastKnownPlayerCount = livePC;
                 _lastPendingSelections = msg.pending_selections || {};
                 var livePoolPending = countTotalPendingSelections(_lastPendingSelections);
@@ -655,25 +634,6 @@ async function confirmSelection() {
     } catch(e) {}
     
     if (currentRoundData) {
-        var myUidStr = String(currentUser ? currentUser.id : '');
-        // 1. If user ALREADY joined this round, immediately transition to game view
-        if (currentRoundData.players && currentRoundData.players[myUidStr]) {
-            hideLoading();
-            showToast('You already joined this round!');
-            var pc = document.getElementById('cs-preview-container');
-            if (pc) pc.classList.add('hidden');
-            var cs = document.getElementById('card-select-screen');
-            if (cs) cs.classList.add('hidden');
-            stopSelectionCountdown();
-            if (roundUnsubscribe) { roundUnsubscribe(); roundUnsubscribe = null; }
-            await navigateTo('game');
-            setupGameBoard();
-            await loadMyCartelas(currentRoundData);
-            listenToRound(currentRoundId);
-            return;
-        }
-
-        // 2. Validate cards taken by OTHER players
         var takenNow = new Set((currentRoundData.taken_cartelas || []).map(function(v) { return parseInt(v) || v; }));
         for (var i = 0; i < selectedCartelas.length; i++) {
             var cn = selectedCartelas[i];
@@ -684,11 +644,7 @@ async function confirmSelection() {
             }
         }
         if (selectedCartelas.length === 0) {
-            hideLoading();
             showToast('All selected cards are taken. Pick different cards.');
-            _updateCartelaGrid(currentRoundData.taken_cartelas, currentRoundData.pending_selections, document.getElementById('card-select-grid'));
-            updateSelectedInfo();
-            renderAllPreviews();
             return;
         }
         var uniqueCheck = {};
@@ -696,8 +652,6 @@ async function confirmSelection() {
             if (uniqueCheck[selectedCartelas[j]]) {
                 showToast('Duplicate card detected. Please reselect.');
                 selectedCartelas = [];
-                updateSelectedInfo();
-                renderAllPreviews();
                 return;
             }
             uniqueCheck[selectedCartelas[j]] = true;
@@ -752,21 +706,8 @@ async function confirmSelection() {
         hideLoading();
         console.error('Error joining round:', err);
         var msg = err.message || '';
-        if (msg.indexOf('already joined') !== -1) {
-            showToast('Rejoining game...');
-            var pc = document.getElementById('cs-preview-container');
-            if (pc) pc.classList.add('hidden');
-            var cs = document.getElementById('card-select-screen');
-            if (cs) cs.classList.add('hidden');
-            stopSelectionCountdown();
-            if (roundUnsubscribe) { roundUnsubscribe(); roundUnsubscribe = null; }
-            await navigateTo('game');
-            setupGameBoard();
-            var freshSnap = await db.collection('rounds').doc(currentRoundId).get();
-            if (freshSnap.exists) await loadMyCartelas(freshSnap.data());
-            listenToRound(currentRoundId);
-        } else if (msg.indexOf('Spectating') !== -1 || msg.indexOf('already started') !== -1 || msg.indexOf('finished') !== -1 || msg.indexOf('no longer accepting') !== -1) {
-            showToast('Round ended or started. Finding new game...');
+        if (msg.indexOf('Spectating') !== -1 || msg.indexOf('already started') !== -1 || msg.indexOf('finished') !== -1) {
+            showToast('Round ended just before your pick was confirmed. Finding new game...');
             if (roundUnsubscribe) { roundUnsubscribe(); roundUnsubscribe = null; }
             playNow(currentStake);
         } else {

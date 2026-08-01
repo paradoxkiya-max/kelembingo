@@ -264,7 +264,7 @@ function listenToRound(roundId) {
         var elCalledCount = document.getElementById('game-called-count');
         var elCountdown = document.getElementById('game-countdown');
 
-        var playerCount = parsePlayerCount(data.player_count);
+        var playerCount = data.player_count || 0;
         var roundStake = data.stake || currentStake || 10;
         var derash = Math.round(playerCount * roundStake * 0.75 * 10) / 10;
         if (elPlayers) elPlayers.textContent = playerCount;
@@ -506,7 +506,7 @@ function loadMyCartelas(roundData) {
         var called = roundData.called_numbers || [];
         var el;
         if (el = document.getElementById('game-called-count')) el.textContent = called.length;
-        var pc = parsePlayerCount(roundData.player_count);
+        var pc = roundData.player_count || 0;
         var roundStake = roundData.stake || currentStake || 10;
         var dr = Math.round(pc * roundStake * 0.75 * 10) / 10;
         if (el = document.getElementById('game-players')) el.textContent = pc;
