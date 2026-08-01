@@ -453,6 +453,18 @@ async def start_background_monitor():
     except Exception:
         pass
 
+    # Auto-generate cartelas_master if empty
+    try:
+        def _check_and_gen_cartelas():
+            existing = list(engine.master_ref.limit(1).get())
+            if not existing:
+                logger.info("[Startup] cartelas_master is empty — generating 500 master cartelas...")
+                engine._generate_all_cartelas_sync()
+                logger.info("[Startup] Auto-generated 500 master cartelas successfully.")
+        await _db(_check_and_gen_cartelas)
+    except Exception as e:
+        logger.warning(f"[Startup] Cartela check error: {e}")
+
     async def _monitor():
         while True:
             try:
