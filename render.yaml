@@ -40,7 +40,7 @@ services:
       - key: GATEWAY_URL
         value: https://kelembingo-gateway-gjfl.onrender.com
       - key: WEBAPP_URL
-        value: https://kelembingo-frontend.onrender.com/game.html
+        value: https://kelembingo-frontend.onrender.com/game
       - key: INTERNAL_API_KEY
         value: kelembingo-internal-secret-2026
       - key: BOT_TOKEN
