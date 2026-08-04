@@ -147,11 +147,15 @@ async function submitWithdrawal() {
                 above_max: 'Maximum withdrawal is ' + (val.max || 50000) + ' ETB',
                 no_phone: 'Please register with your phone number first',
                 account_new: 'Your account is too new. Wait 24 hours after registration.',
+                deposit_required: 'Minimum initial deposit of ' + (val.min_deposit || 50) + ' ETB required before withdrawing.',
                 pending_exists: 'You already have a pending withdrawal. Wait for it to be processed.',
                 daily_limit: 'Daily withdrawal limit reached (' + (val.limit || 3) + '/day). Try again tomorrow.',
                 cooldown: 'Please wait ' + (val.minutes || 0) + ' minutes before another withdrawal.',
+                invalid_amount: 'Please enter a valid withdrawal amount.',
+                not_registered: 'User account not found. Please register first.',
+                system_error: 'Server error validating withdrawal. Try again.'
             };
-            showToast(errorMessages[val.error] || 'Withdrawal not allowed');
+            showToast(errorMessages[val.error] || 'Withdrawal not allowed (' + (val.error || 'error') + ')');
             return;
         }
         var batch = db.batch();
