@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import math
 import hashlib
 import asyncio
 from urllib.parse import quote
@@ -56,7 +57,7 @@ MAIN_INLINE_KEYBOARD = InlineKeyboardMarkup(
 
 
 def _admin_id():
-    return int(ADMIN_CHAT_ID) if ADMIN_CHAT_ID else 8462274722
+    return int(ADMIN_CHAT_ID) if ADMIN_CHAT_ID else 0
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -305,7 +306,7 @@ async def deposit_telebirr_name(update: Update, context: ContextTypes.DEFAULT_TY
 async def deposit_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         amount = float(update.message.text.strip())
-        if amount < 10:
+        if not math.isfinite(amount) or amount < 10:
             await update.effective_message.reply_text(get_bot_text('deposit_min_amount', db))
             return DEPOSIT_AMOUNT
     except ValueError:
@@ -448,6 +449,9 @@ async def _show_withdraw_flow(query, context):
 async def withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         amount = float(update.message.text.strip())
+        if not math.isfinite(amount):
+            await update.effective_message.reply_text(get_bot_text('withdraw_invalid_number', db))
+            return WITHDRAW_AMOUNT
     except ValueError:
         await update.effective_message.reply_text(get_bot_text('withdraw_invalid_number', db))
         return WITHDRAW_AMOUNT
@@ -564,6 +568,9 @@ async def transfer_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def transfer_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         amount = float(update.message.text.strip())
+        if not math.isfinite(amount):
+            await update.effective_message.reply_text(get_bot_text('transfer_invalid_amount', db))
+            return TRANSFER_AMOUNT
     except ValueError:
         await update.effective_message.reply_text(get_bot_text('transfer_invalid_amount', db))
         return TRANSFER_AMOUNT
@@ -1092,7 +1099,8 @@ def main():
             REG_CONTACT: [MessageHandler(filters.CONTACT, reg_contact),
                           MessageHandler(filters.TEXT & ~filters.COMMAND, reg_contact)],
         },
-        fallbacks=[CommandHandler("start", start), MessageHandler(filters.Regex("^Cancel$"), cancel)],
+        fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start),
+                   MessageHandler(filters.Regex("^Cancel$"), cancel)],
     )
     app.add_handler(reg_conv, group=2)
 
@@ -1110,6 +1118,7 @@ def main():
             DEPOSIT_TXN_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, deposit_txn_number)],
         },
         fallbacks=[
+            CommandHandler("cancel", cancel),
             CommandHandler("start", start),
             MessageHandler(filters.Regex("^Cancel$"), cancel),
             CallbackQueryHandler(handle_deposit, pattern="^(menu_deposit|bal_deposit)$"),
@@ -1130,6 +1139,7 @@ def main():
             WITHDRAW_TELEBIRR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, withdraw_telebirr_name)],
         },
         fallbacks=[
+            CommandHandler("cancel", cancel),
             CommandHandler("start", start),
             MessageHandler(filters.Regex("^Cancel$"), cancel),
             CallbackQueryHandler(handle_withdraw, pattern="^(menu_withdraw|bal_withdraw)$"),
@@ -1150,7 +1160,7 @@ def main():
             TRANSFER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, transfer_amount)],
             TRANSFER_CONFIRM: [CallbackQueryHandler(transfer_confirm, pattern="^tf_")],
         },
-        fallbacks=[CommandHandler("start", start), MessageHandler(filters.Regex("^Cancel$"), cancel)],
+        fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start), MessageHandler(filters.Regex("^Cancel$"), cancel)],
     )
     app.add_handler(transfer_conv, group=5)
 
@@ -1165,7 +1175,7 @@ def main():
         states={
             BONUS_CONFIRM: [CallbackQueryHandler(bonus_confirm, pattern="^bonus_")],
         },
-        fallbacks=[CommandHandler("start", start), MessageHandler(filters.Regex("^Cancel$"), cancel)],
+        fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start), MessageHandler(filters.Regex("^Cancel$"), cancel)],
     )
     app.add_handler(bonus_conv, group=6)
 

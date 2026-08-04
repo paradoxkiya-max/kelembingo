@@ -42,3 +42,6 @@ logs/
 data/
 log.md
 *.db
+*.db-shm
+*.db-wal
+*.db-journal

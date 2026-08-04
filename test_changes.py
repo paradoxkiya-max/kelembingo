@@ -129,8 +129,8 @@ def test_predictor_phases():
         
         has_target_range = 'GAME_LENGTH_RANGE = (15, 30)' in content
         has_target_normalizer = 'def normalize_game_target' in content
-        has_exact_one_winner = 'if candidate_winners_count == 1:' in content
-        has_hard_cap = 'elif next_call_index < max_calls:' in content and 'candidate_winners_count > 0' in content
+        has_phase1_safe = 'next_call_index < game_target' in content
+        has_phase2_target = "for n in (target_winner.get('pattern', []) if target_winner else []):" in content
 
         if has_target_range:
             print("  [OK] Round target range set to 15-30")
@@ -142,17 +142,17 @@ def test_predictor_phases():
         else:
             print("  [FAIL] normalize_game_target not found")
 
-        if has_exact_one_winner:
-            print("  [OK] Predictor prefers exactly one winner")
+        if has_phase1_safe:
+            print("  [OK] Predictor Phase 1 (safe calls, avoid winners)")
         else:
-            print("  [FAIL] Exact one-winner preference not found")
+            print("  [FAIL] Phase 1 safe-call branch not found")
 
-        if has_hard_cap:
-            print("  [OK] Predictor has a hard final-call branch")
+        if has_phase2_target:
+            print("  [OK] Predictor Phase 2 (target predetermined winner)")
         else:
-            print("  [FAIL] Hard cap branch not found")
+            print("  [FAIL] Phase 2 target-winner branch not found")
 
-        return has_target_range and has_target_normalizer and has_exact_one_winner and has_hard_cap
+        return has_target_range and has_target_normalizer and has_phase1_safe and has_phase2_target
     except Exception as e:
         print(f"  [FAIL] Error reading engine: {e}")
         return False
@@ -171,8 +171,8 @@ def test_winner_collection():
         
         has_evaluate = 'winner_entries = engine.evaluate_winners' in content
         has_single_choice = 'chosen_winner = engine.choose_single_winner' in content
-        has_forced_cap = "completion_reason = 'forced_single_winner_max_30'" in content
-        has_single_payout = "await engine.end_round(round_id, [int(winner_id)])" in content
+        has_forced_cap = "completion_reason = 'no_winner_max_30'" in content
+        has_single_payout = "engine.end_round(round_id, [int(winner_id)])" in content
 
         if has_evaluate:
             print("  [OK] Server evaluates natural winners")

@@ -97,6 +97,8 @@ function api(method, path, body) {
         method: method,
         headers: { 'Content-Type': 'application/json' }
     };
+    var token = localStorage.getItem('token');
+    if (token) opts.headers['Authorization'] = 'Bearer ' + token;
     if (body !== undefined) opts.body = JSON.stringify(body);
     return fetch(API_BASE + path, opts).then(function (res) {
         if (!res.ok) {

@@ -22,6 +22,61 @@ import requests
 logger = logging.getLogger(__name__)
 
 
+class GatewayUnavailableError(Exception):
+    """The Gateway could not be reached (connection error, timeout, or 5xx).
+
+    Raised after bounded retries so callers distinguish a real outage from a
+    missing document instead of silently treating every failure as 'not exists'
+    (which could trigger destructive merge=False writes).
+    """
+
+
+_RETRYABLE_STATUS = {500, 502, 503, 504}
+_MAX_RETRIES = 3
+_RETRY_BACKOFF = [0.5, 1.0, 2.0]
+
+_gateway_down = False
+_gw_lock = threading.Lock()
+
+
+def _set_gateway_down(down: bool):
+    global _gateway_down
+    with _gw_lock:
+        _gateway_down = down
+
+
+def is_gateway_down() -> bool:
+    global _gateway_down
+    with _gw_lock:
+        return _gateway_down
+
+
+def _request_with_retry(method: str, url: str, *, json=None, headers=None, timeout=15):
+    """Issue a request with bounded retries on connection errors/timeouts/5xx.
+
+    Returns the final Response on success (HTTP < 500). Raises
+    GatewayUnavailableError after exhausting retries.
+    """
+    last_exc = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            r = requests.request(method, url, json=json, headers=headers, timeout=timeout)
+            if r.status_code < 500:
+                _set_gateway_down(False)
+                return r
+            last_exc = GatewayUnavailableError(
+                f"Gateway {method} {url} -> HTTP {r.status_code}"
+            )
+            logger.warning(f"Gateway {method} {url} -> HTTP {r.status_code} (attempt {attempt + 1}/{_MAX_RETRIES})")
+        except (requests.ConnectionError, requests.Timeout) as e:
+            last_exc = GatewayUnavailableError(f"Gateway {method} {url} unreachable: {e}")
+            logger.warning(f"Gateway {method} {url} error (attempt {attempt + 1}/{_MAX_RETRIES}): {e}")
+        if attempt < _MAX_RETRIES - 1:
+            time.sleep(_RETRY_BACKOFF[attempt])
+    _set_gateway_down(True)
+    raise last_exc
+
+
 class CacheStore:
     """Thread-safe TTL cache used to cut HTTP round-trips to the Gateway.
 
@@ -217,7 +272,12 @@ class GatewayDocRef:
 
     def get(self, transaction=None, **kwargs):
         """Fetch document. The `transaction` kwarg is accepted for compatibility
-        with firestore transactional patterns — transactional reads bypass the cache."""
+        with firestore transactional patterns — transactional reads bypass the cache.
+
+        Only HTTP 404 means "not exists". Connection errors / timeouts / 5xx
+        raise GatewayUnavailableError after bounded retries so callers never
+        mistake an outage for a missing document.
+        """
         ttl = self._ttl()
         use_cache = self.cache is not None and ttl > 0 and transaction is None
         cache_key = _cache_key_for_doc(self.collection, self.id)
@@ -226,46 +286,47 @@ class GatewayDocRef:
             if cached is not None:
                 return cached
         url = f"{self.gateway_url}/api/db/{self.collection}/{self.id}"
-        try:
-            r = requests.get(url, headers=self._headers(), timeout=10)
-            if r.status_code == 200:
-                body = r.json()
-                snap = GatewayDocSnapshot(body.get("id", self.id), body.get("data", {}), True)
-                if use_cache:
-                    self.cache.set(cache_key, snap, ttl)
-                return snap
+        r = _request_with_retry("GET", url, headers=self._headers(), timeout=10)
+        if r.status_code == 200:
+            body = r.json()
+            snap = GatewayDocSnapshot(body.get("id", self.id), body.get("data", {}), True)
+            if use_cache:
+                self.cache.set(cache_key, snap, ttl)
+            return snap
+        if r.status_code == 404:
+            _set_gateway_down(False)
             return GatewayDocSnapshot(self.id, {}, False)
-        except Exception as e:
-            logger.error(f"GatewayDocRef.get {self.collection}/{self.id}: {e}")
-            return GatewayDocSnapshot(self.id, {}, False)
+        raise GatewayUnavailableError(
+            f"Gateway GET {url} -> HTTP {r.status_code}"
+        )
 
     def set(self, data, merge=False):
         url = f"{self.gateway_url}/api/db/{self.collection}/{self.id}"
-        try:
-            payload_data = _prepare_data_for_json(data)
-            r = requests.post(url, json={"data": payload_data, "merge": merge}, headers=self._headers(), timeout=10)
-            r.raise_for_status()
-            self._invalidate()
-        except Exception as e:
-            logger.error(f"GatewayDocRef.set {self.collection}/{self.id}: {e}")
+        payload_data = _prepare_data_for_json(data)
+        r = _request_with_retry(
+            "POST", url,
+            json={"data": payload_data, "merge": merge},
+            headers=self._headers(), timeout=10,
+        )
+        r.raise_for_status()
+        self._invalidate()
 
     def update(self, data):
         url = f"{self.gateway_url}/api/db/{self.collection}/{self.id}"
-        try:
-            payload_data = _prepare_data_for_json(data)
-            r = requests.patch(url, json={"data": payload_data}, headers=self._headers(), timeout=10)
-            r.raise_for_status()
-            self._invalidate()
-        except Exception as e:
-            logger.error(f"GatewayDocRef.update {self.collection}/{self.id}: {e}")
+        payload_data = _prepare_data_for_json(data)
+        r = _request_with_retry(
+            "PATCH", url,
+            json={"data": payload_data},
+            headers=self._headers(), timeout=10,
+        )
+        r.raise_for_status()
+        self._invalidate()
 
     def delete(self):
         url = f"{self.gateway_url}/api/db/{self.collection}/{self.id}"
-        try:
-            requests.delete(url, headers=self._headers(), timeout=10)
-            self._invalidate()
-        except Exception as e:
-            logger.error(f"GatewayDocRef.delete {self.collection}/{self.id}: {e}")
+        r = _request_with_retry("DELETE", url, headers=self._headers(), timeout=10)
+        r.raise_for_status()
+        self._invalidate()
 
 
 # ── Collection Reference / Query ─────────────────────────────────
@@ -361,19 +422,21 @@ class GatewayCollectionRef:
             if cached is not None:
                 return cached
         url = self._build_url()
-        try:
-            r = requests.get(url, headers=self._headers(), timeout=15)
-            if r.status_code == 200:
-                docs = r.json()
-                if isinstance(docs, list):
-                    result = [GatewayDocSnapshot(d.get("id"), d.get("data", {}), True) for d in docs]
-                    if use_cache:
-                        self.cache.set(cache_key, result, ttl)
-                    return result
+        r = _request_with_retry("GET", url, headers=self._headers(), timeout=15)
+        if r.status_code == 200:
+            docs = r.json()
+            if isinstance(docs, list):
+                result = [GatewayDocSnapshot(d.get("id"), d.get("data", {}), True) for d in docs]
+                if use_cache:
+                    self.cache.set(cache_key, result, ttl)
+                return result
             return []
-        except Exception as e:
-            logger.error(f"GatewayCollectionRef.get {self.collection}: {e}")
+        if r.status_code == 404:
+            _set_gateway_down(False)
             return []
+        raise GatewayUnavailableError(
+            f"Gateway GET {url} -> HTTP {r.status_code}"
+        )
 
     def stream(self):
         """Alias for get() — bots use .stream() like an iterator."""
@@ -427,3 +490,7 @@ class GatewayClient:
 
     def cache_stats(self):
         return self.cache.stats()
+
+    def is_gateway_down(self) -> bool:
+        """True if the most recent request to the gateway failed with a network/5xx error."""
+        return is_gateway_down()

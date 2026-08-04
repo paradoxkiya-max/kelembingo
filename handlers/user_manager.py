@@ -2,6 +2,18 @@ from firestore_db import FieldFilter, transactional as firestore_transactional
 from firestore_db import MockFirestoreClient
 from datetime import datetime, timezone
 from typing import Dict, Optional
+import math
+
+
+def finite_amount(value) -> Optional[float]:
+    """Return value as a finite float, or None if it's not a valid finite number."""
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(amount):
+        return None
+    return amount
 
 
 class UserManager:
@@ -113,6 +125,10 @@ class UserManager:
             from datetime import timedelta
             from handlers.bot_content import get_config_value
             import traceback
+
+            amount = finite_amount(amount)
+            if amount is None or amount <= 0:
+                return {'ok': False, 'error': 'invalid_amount'}
 
             # Read live config from Firestore (admin-editable via Config tab)
             min_withdraw = get_config_value('cfg_min_withdraw', self.db, as_type=int)
@@ -294,6 +310,9 @@ class UserManager:
     async def transfer_funds(self, sender_id: int, recipient_id: int, amount: float) -> bool:
         if sender_id == recipient_id:
             return False
+        amount = finite_amount(amount)
+        if amount is None or amount <= 0:
+            return False
         sender_ref = self.users_ref.document(str(sender_id))
         recipient_ref = self.users_ref.document(str(recipient_id))
         transaction = self.db.transaction()
@@ -327,7 +346,12 @@ class UserManager:
         coins = user.get('bonus', 0)
         if coins <= 0:
             return None
+        rate = finite_amount(rate)
+        if rate is None or rate <= 0:
+            return None
         etb = coins / rate
+        if not math.isfinite(etb):
+            return None
         self.users_ref.document(str(user_id)).update({
             'bonus': 0,
             'play_wallet': user.get('play_wallet', 0) + etb,

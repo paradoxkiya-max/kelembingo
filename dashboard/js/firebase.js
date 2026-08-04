@@ -71,6 +71,8 @@
             method,
             headers: { 'Content-Type': 'application/json' },
         };
+        const token = localStorage.getItem('token');
+        if (token) opts.headers['Authorization'] = 'Bearer ' + token;
         if (body !== undefined) opts.body = JSON.stringify(body);
         const url = API_BASE ? (API_BASE + path) : path;
         return fetch(url, opts).then(async r => {

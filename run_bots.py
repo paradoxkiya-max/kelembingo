@@ -130,17 +130,23 @@ if __name__ == "__main__":
     except RuntimeError:
         pass
 
+    USE_GATEWAY = os.getenv("USE_GATEWAY", "false").lower() == "true"
+
     logger.info("🚀 Starting Kelem Bingo Bot Service...")
 
-    # Re-seed from the latest backup if this deploy came up with an empty DB.
-    auto_restore_on_startup()
+    # In gateway mode the GATEWAY service owns the live DB and runs the backup
+    # scheduler + startup restore. Here the local DB is vestigial, so skip both.
+    if not USE_GATEWAY:
+        auto_restore_on_startup()
 
     game_proc = multiprocessing.Process(target=run_game_bot, name="GameBot")
     admin_proc = multiprocessing.Process(target=run_admin_bot, name="AdminBot")
     support_proc = multiprocessing.Process(target=run_support_bot, name="SupportBot")
     admin_support_proc = multiprocessing.Process(target=run_admin_support_bot, name="AdminSupportBot")
     admin_talk_proc = multiprocessing.Process(target=run_admin_talk_bot, name="AdminTalkBot")
-    backup_proc = multiprocessing.Process(target=run_backup_scheduler, name="BackupScheduler")
+    backup_proc = None
+    if not USE_GATEWAY:
+        backup_proc = multiprocessing.Process(target=run_backup_scheduler, name="BackupScheduler")
 
     game_proc.start()
     logger.info("✅ Game Bot started")
@@ -152,15 +158,16 @@ if __name__ == "__main__":
     logger.info("✅ Admin Support Bot started")
     admin_talk_proc.start()
     logger.info("✅ Admin Talk Bot started")
-    backup_proc.start()
-    if os.getenv("USE_GATEWAY", "false").lower() == "true":
+    if backup_proc:
+        backup_proc.start()
+    if USE_GATEWAY:
         logger.info("🌐 Dedicated Bot Service running with Gateway bridge (port %s)...", os.environ.get("PORT", "8000"))
         try:
             run_health_check_server()
         except KeyboardInterrupt:
             logger.info("🛑 Shutting down...")
         finally:
-            for proc in (game_proc, admin_proc, support_proc, admin_support_proc, admin_talk_proc, backup_proc):
+            for proc in (game_proc, admin_proc, support_proc, admin_support_proc, admin_talk_proc):
                 if proc.is_alive():
                     proc.terminate()
                     proc.join(timeout=5)
@@ -171,7 +178,10 @@ if __name__ == "__main__":
         except KeyboardInterrupt:
             logger.info("🛑 Shutting down...")
         finally:
-            for proc in (game_proc, admin_proc, support_proc, admin_support_proc, admin_talk_proc, backup_proc):
+            procs = [game_proc, admin_proc, support_proc, admin_support_proc, admin_talk_proc]
+            if backup_proc:
+                procs.append(backup_proc)
+            for proc in procs:
                 if proc.is_alive():
                     proc.terminate()
                     proc.join(timeout=5)

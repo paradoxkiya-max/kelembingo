@@ -255,21 +255,6 @@
     </div>
 
     <script>
-        // db is provided by firebase.js emulator bridge (window.db)
-        // Seed default super admin if not exists
-        db.collection('admins').where('username', '==', 'paradox').limit(1).get().then(function(snap) {
-            if (snap.empty) {
-                db.collection('admins').add({
-                    displayName: 'Super Admin',
-                    username: 'paradox',
-                    password: '12345678',
-                    role: 'super_admin',
-                    isActive: true,
-                    createdAt: firebase.firestore.FieldValue.serverTimestamp()
-                });
-            }
-        });
-
         const form = document.getElementById('loginForm');
         const usernameInput = document.getElementById('username');
         const passwordInput = document.getElementById('password');
@@ -278,6 +263,10 @@
         const submitBtn = document.getElementById('submitBtn');
         const btnText = document.getElementById('btnText');
         const btnSpinner = document.getElementById('btnSpinner');
+
+        function apiBase() {
+            return window.BACKEND_URL || window.API_BASE || '';
+        }
 
         function showError(msg) {
             errorText.textContent = msg;
@@ -309,7 +298,7 @@
             hideError();
 
             const username = usernameInput.value.trim();
-            const password = passwordInput.value.trim();
+            const password = passwordInput.value;
 
             if (!username || !password) {
                 showError('Please enter both username and password.');
@@ -318,40 +307,25 @@
 
             setLoading(true);
 
-            const SUPER_ADMIN = { username: 'paradox', password: '12345678', role: 'super_admin' };
-
             try {
-                if (username === SUPER_ADMIN.username && password === SUPER_ADMIN.password) {
-                    localStorage.setItem('loggedIn', 'true');
-                    localStorage.setItem('username', SUPER_ADMIN.username);
-                    localStorage.setItem('role', SUPER_ADMIN.role);
-                    window.location.href = '/';
-                    return;
-                }
+                const res = await fetch(apiBase() + '/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: username, password: password })
+                });
 
-                const snapshot = await db.collection('admins')
-                    .where('username', '==', username)
-                    .limit(1)
-                    .get();
-
-                if (snapshot.empty) {
+                if (!res.ok) {
                     showError('Invalid username or password.');
                     setLoading(false);
                     return;
                 }
 
-                const doc = snapshot.docs[0];
-                const adminData = doc.data();
-
-                if (adminData.password !== password) {
-                    showError('Invalid username or password.');
-                    setLoading(false);
-                    return;
-                }
-
+                const data = await res.json();
+                localStorage.setItem('token', data.token);
                 localStorage.setItem('loggedIn', 'true');
-                localStorage.setItem('username', adminData.username || username);
-                localStorage.setItem('role', adminData.role || 'admin');
+                localStorage.setItem('username', data.username);
+                localStorage.setItem('role', data.role || 'admin');
+                localStorage.setItem('displayName', data.display_name || data.username);
 
                 window.location.href = '/';
 

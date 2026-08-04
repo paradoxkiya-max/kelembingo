@@ -31,9 +31,13 @@ import firestore_db
 
 logger = logging.getLogger(__name__)
 
-# ── Hard-coded backup bot token (as requested) ──
+# ── Backup bot token (from env — never hardcode secrets) ──
 # Backup bot -> t.me/kelembackupbot
-BACKUP_BOT_TOKEN = os.getenv("BACKUP_BOT_TOKEN", "8676053372:AAGVEvGAHBAvselQJDSD9MKqFxM6r7eVmgA")
+BACKUP_BOT_TOKEN = os.getenv("BACKUP_BOT_TOKEN", "")
+if not BACKUP_BOT_TOKEN:
+    logger.warning(
+        "BACKUP_BOT_TOKEN is not set — backups and startup auto-restore are disabled."
+    )
 
 # The backup is sent to the admin's chat with the backup bot.
 # For reliable pinning, create a Telegram GROUP, add @kelembackupbot as admin,

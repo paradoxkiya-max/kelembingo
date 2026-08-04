@@ -1,9 +1,14 @@
 import os
+import math
 import random
 import asyncio
 import logging
 import time
 import socketio
+import hmac
+import hashlib
+import secrets as _secrets
+import base64
 from fastapi import FastAPI, HTTPException, Query as FastAPIQuery, Body, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response, JSONResponse
@@ -130,6 +135,144 @@ socket_app = CORSASGIMiddleware(_raw_socket_app, ALLOWED_ORIGINS, ALLOWED_ORIGIN
 engine = RoundEngine(db)
 user_manager = UserManager(db)
 MAX_SMART_CALLS = GAME_LENGTH_RANGE[1]
+
+# ─── Auth (C1) ───
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "paradox")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "12345678")
+AUTH_SECRET = os.getenv("ADMIN_AUTH_SECRET") or os.getenv("INTERNAL_API_KEY") or _secrets.token_hex(32)
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
+AUTH_TOKEN_TTL = int(os.getenv("ADMIN_AUTH_TTL_HOURS", "12")) * 3600
+PROTECTED_DB_COLLECTIONS = {"admins", "system", "settings", "bot_content"}
+PUBLIC_ADMIN_PATHS = {"/api/admin/login", "/api/admin/withdrawals/notify"}
+
+
+def _b64e(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).decode().rstrip("=")
+
+
+def _b64d(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def _create_token(username: str, role: str, display_name: str = "") -> str:
+    payload = {
+        "u": username,
+        "r": role,
+        "d": display_name,
+        "exp": int(time.time()) + AUTH_TOKEN_TTL,
+    }
+    body = _b64e(json.dumps(payload).encode())
+    sig = hmac.new(AUTH_SECRET.encode(), body.encode(), hashlib.sha256).hexdigest()
+    return f"{body}.{sig}"
+
+
+def _verify_token(token: str) -> Optional[dict]:
+    try:
+        body, sig = token.split(".")
+        expected = hmac.new(AUTH_SECRET.encode(), body.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            return None
+        payload = json.loads(_b64d(body))
+        if int(payload.get("exp", 0)) < int(time.time()):
+            return None
+        return {"username": payload.get("u"), "role": payload.get("r", "admin"),
+                "display_name": payload.get("d", "")}
+    except Exception:
+        return None
+
+
+def _auth_ok(request: Request) -> Optional[dict]:
+    ik = request.headers.get("x-internal-key", "")
+    if INTERNAL_API_KEY and ik and hmac.compare_digest(ik, INTERNAL_API_KEY):
+        return {"username": "internal", "role": "internal", "display_name": "Internal"}
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        admin = _verify_token(auth[7:].strip())
+        if admin:
+            return admin
+    return None
+
+
+async def require_auth(request: Request):
+    admin = _auth_ok(request)
+    if not admin:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return admin
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/auth/login")
+async def auth_login(req: LoginRequest):
+    username = (req.username or "").strip()
+    password = req.password or ""
+    if ADMIN_PASSWORD and username == ADMIN_USERNAME and hmac.compare_digest(password, ADMIN_PASSWORD):
+        return {"ok": True, "token": _create_token(username, "super_admin", "Super Admin"),
+                "username": username, "role": "super_admin", "display_name": "Super Admin"}
+    try:
+        admins = list(db.collection("admins").where("username", "==", username).limit(1).get())
+        if admins:
+            ad = admins[0].to_dict()
+            stored = str(ad.get("password", ""))
+            pw_hash = hashlib.sha256(password.encode()).hexdigest()
+            if stored and (hmac.compare_digest(stored, pw_hash) or hmac.compare_digest(stored, password)):
+                role = ad.get("role", "admin")
+                dn = ad.get("displayName", "") or ad.get("display_name", "") or username
+                return {"ok": True, "token": _create_token(username, role, dn),
+                        "username": username, "role": role, "display_name": dn}
+    except Exception as e:
+        logger.warning(f"Auth: admins collection check failed: {e}")
+    raise HTTPException(status_code=401, detail="Invalid username or password")
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request):
+    admin = _auth_ok(request)
+    if not admin:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return {"ok": True, **admin}
+
+
+@app.post("/api/auth/logout")
+async def auth_logout():
+    return {"ok": True}
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path.rstrip("/") or "/"
+    method = request.method
+    needs_auth = False
+
+    if method == "OPTIONS":
+        return await call_next(request)
+
+    if path.startswith("/api/admin"):
+        if path not in PUBLIC_ADMIN_PATHS:
+            needs_auth = True
+    elif path.startswith("/api/rounds") and method in ("POST", "PUT", "DELETE"):
+        if path.endswith(("/start", "/call", "/end")):
+            needs_auth = True
+    elif path in ("/api/cartelas/generate", "/api/cartelas/reset") and method == "POST":
+        needs_auth = True
+    elif path.startswith("/api/notify") and method == "POST":
+        needs_auth = True
+    elif path.startswith("/api/db") and method in ("POST", "PATCH", "PUT", "DELETE"):
+        rest = path[len("/api/db"):].strip("/")
+        collection = rest.split("/", 1)[0]
+        if collection in PROTECTED_DB_COLLECTIONS:
+            needs_auth = True
+
+    if needs_auth:
+        admin = _auth_ok(request)
+        if not admin:
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+
+    return await call_next(request)
+
 
 @app.get("/api/time")
 def get_server_time():
@@ -291,7 +434,10 @@ async def _game_loop(round_id: str):
                 winners = data.get('winners', [])
                 if winners and not data.get('payout_processed'):
                     try:
-                        await engine.end_round(round_id, [int(w) for w in winners])
+                        result = await engine.end_round(round_id, [int(w) for w in winners])
+                        if isinstance(result, dict) and result.get('error'):
+                            logger.error(f"[GameLoop] Payout skipped for {round_id}: {result['error']}")
+                            return
                     except Exception as e:
                         logger.error(f"[GameLoop] Error distributing prizes for {round_id}: {e}")
                         return
@@ -373,7 +519,10 @@ async def _game_loop(round_id: str):
                 winners = rd_after.get('winners', [])
                 if winners and not rd_after.get('payout_processed'):
                     try:
-                        await engine.end_round(round_id, [int(w) for w in winners])
+                        result = await engine.end_round(round_id, [int(w) for w in winners])
+                        if isinstance(result, dict) and result.get('error'):
+                            logger.error(f"[GameLoop] Payout skipped for {round_id}: {result['error']}")
+                            return
                     except Exception as e:
                         logger.error(f"[GameLoop] Error distributing prizes: {e}")
                 await _db(lambda: db.collection('rounds').document(round_id).update({'payout_processed': True}))
@@ -414,7 +563,10 @@ async def _game_loop(round_id: str):
                 }))
                 await broadcast_event('rounds', round_id)
                 try:
-                    await engine.end_round(round_id, [int(winner_id)])
+                    result = await engine.end_round(round_id, [int(winner_id)])
+                    if isinstance(result, dict) and result.get('error'):
+                        logger.error(f"[GameLoop] Payout skipped for {round_id}: {result['error']}")
+                        return
                 except Exception as e:
                     logger.error(f"[GameLoop] Error distributing prizes: {e}")
                 for uid in set(list(players.keys()) + [winner_id]):
@@ -491,6 +643,13 @@ async def start_background_monitor():
                 for doc in selecting_docs:
                     rid = doc.id
                     if rid not in _active_game_tasks:
+                        _start_game_loop(rid)
+
+                # H1: Resume game loops for playing rounds orphaned by a restart
+                for doc in playing_docs:
+                    rid = doc.id
+                    if rid not in _active_game_tasks:
+                        logger.info(f"[Monitor] Resuming orphaned playing round {rid}")
                         _start_game_loop(rid)
                         
                 # ── Continuous Loop Enforcement ──
@@ -975,8 +1134,11 @@ async def submit_deposit(req: DepositSubmitRequest):
     if not telebirr_name:
         raise HTTPException(status_code=400, detail=get_bot_text('deposit_ask_name', db))
 
-    amount = float(req.amount)
-    if amount < 10:
+    try:
+        amount = float(req.amount)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=get_bot_text('deposit_invalid_number', db))
+    if not math.isfinite(amount) or amount < 10:
         raise HTTPException(status_code=400, detail=get_bot_text('deposit_min_amount', db))
 
     transaction_id = (req.transaction_id or '').strip()
@@ -1041,6 +1203,8 @@ async def admin_approve_deposit(deposit_id: str, req: DepositActionRequest):
         raise HTTPException(status_code=400, detail=f"Deposit already {d.get('status')}")
     amount = d.get('amount', 0)
     user_id = str(d.get('userId', ''))
+    if not math.isfinite(float(amount)) or float(amount) <= 0:
+        raise HTTPException(status_code=400, detail="Invalid deposit amount")
 
     # Credit user balance
     user_snap = db.collection('users').document(user_id).get()
@@ -1171,6 +1335,8 @@ async def admin_approve_withdrawal(withdrawal_id: str, req: DepositActionRequest
         raise HTTPException(status_code=400, detail=f"Already {d.get('status')}")
     amount = d.get('amount', 0)
     user_id = str(d.get('userId', ''))
+    if not math.isfinite(float(amount)) or float(amount) <= 0:
+        raise HTTPException(status_code=400, detail="Invalid withdrawal amount")
 
     db.collection('withdrawals').document(withdrawal_id).update({
         'status': 'approved',
@@ -1234,8 +1400,11 @@ async def admin_edit_balance(user_id: int, req: BalanceEditRequest):
     snap = db.collection('users').document(str(user_id)).get()
     if not snap.exists:
         raise HTTPException(status_code=404, detail="User not found")
+    new_balance = req.new_balance
+    if not math.isfinite(float(new_balance)) or float(new_balance) < 0:
+        raise HTTPException(status_code=400, detail="Invalid balance")
     db.collection('users').document(str(user_id)).update({
-        'play_wallet': req.new_balance,
+        'play_wallet': new_balance,
         'updated_at': datetime.now(tz=timezone.utc).isoformat()
     })
     await broadcast_event('users', str(user_id))

@@ -7,7 +7,7 @@ class AdminHandlers:
         self.db = db
         self.game_engine = game_engine
         self.prediction = prediction
-        admin_id = os.getenv("ADMIN_CHAT_ID", "8462274722")
+        admin_id = os.getenv("ADMIN_CHAT_ID", "")
         self.admin_users = [int(admin_id)] if admin_id else []
 
     def get_handler(self):

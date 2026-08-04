@@ -1,5 +1,9 @@
 services:
   # ── Gateway: API + Engine + SQLite ──
+  #
+  # SECURITY: all tokens below are placeholders. Real values are set in the
+  # Render dashboard (Environment) for each service and have been ROTATED after
+  # being leaked in an earlier commit. Do NOT commit real bot tokens.
   - type: web
     name: kelembingo-gateway
     runtime: docker
@@ -15,13 +19,21 @@ services:
       - key: BACKUP_INTERVAL_MINUTES
         value: "1"
       - key: INTERNAL_API_KEY
-        value: kelembingo-internal-secret-2026
+        value: your_internal_api_key_here
       - key: BOT_TOKEN
-        value: 8611354352:AAG1QIDwoUah0Ifv_4zlerfaW0fQN7dNxAs
+        value: your_bot_token_here
       - key: ADMIN_BOT_TOKEN
-        value: 8831372470:AAHDxwpr6X1RRfRXpwhNpLsdxo2p-ORbvI0
+        value: your_admin_bot_token_here
       - key: ADMIN_CHAT_ID
         value: "8462274722"
+      - key: BACKUP_BOT_TOKEN
+        value: your_backup_bot_token_here
+      - key: BACKUP_CHAT_ID
+        value: "8462274722"
+      - key: ADMIN_USERNAME
+        value: "paradox"
+      - key: ADMIN_PASSWORD
+        value: your_admin_password_here
     autoDeploy: true
 
   # ── Bots: Telegram bot processes ──
@@ -42,15 +54,19 @@ services:
       - key: WEBAPP_URL
         value: https://kelembingo-frontend.onrender.com/game
       - key: INTERNAL_API_KEY
-        value: kelembingo-internal-secret-2026
+        value: your_internal_api_key_here
       - key: BOT_TOKEN
-        value: 8611354352:AAG1QIDwoUah0Ifv_4zlerfaW0fQN7dNxAs
+        value: your_bot_token_here
       - key: ADMIN_BOT_TOKEN
-        value: 8831372470:AAHDxwpr6X1RRfRXpwhNpLsdxo2p-ORbvI0
+        value: your_admin_bot_token_here
       - key: PAYMENT_BOT_TOKEN
-        value: 8801537534:AAEi3UflU4TRCJ10TRlqxMSAF3l7RS4-vYc
+        value: your_payment_bot_token_here
       - key: ADMIN_CHAT_ID
         value: "8462274722"
       - key: ADMIN_TALK_BOT_TOKEN
         value: your_admin_talk_bot_token_here
+      - key: SUPPORT_BOT_TOKEN
+        value: your_support_bot_token_here
+      - key: ADMIN_SUPPORT_BOT_TOKEN
+        value: your_admin_support_bot_token_here
     autoDeploy: true
