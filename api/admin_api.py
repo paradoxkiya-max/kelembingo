@@ -1036,8 +1036,8 @@ async def _notify_admin_deposit_web(deposit_data: dict, deposit_id: str):
         logger.warning(f"[NotifyAdminDeposit] Error: {e}")
 
 
-@app.head("/")
-async def head_root():
+@app.api_route("/", methods=["GET", "HEAD"])
+async def root_ping():
     return Response(status_code=200)
 
 
