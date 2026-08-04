@@ -444,7 +444,7 @@ async def _game_loop(round_id: str):
                     for uid in winners:
                         try: await broadcast_event('users', str(uid))
                         except: pass
-                    await _db(lambda: db.collection('rounds').document(round_id).update({'payout_processed': True}))
+                    # payout_processed already set atomically inside end_round
                     await broadcast_event('rounds', round_id)
                 return
 
@@ -525,7 +525,7 @@ async def _game_loop(round_id: str):
                             return
                     except Exception as e:
                         logger.error(f"[GameLoop] Error distributing prizes: {e}")
-                await _db(lambda: db.collection('rounds').document(round_id).update({'payout_processed': True}))
+                # payout_processed already set atomically inside end_round
                 await broadcast_event('rounds', round_id)
                 logger.info(f"[GameLoop] ROUND COMPLETE {round_id}: winner={winner_id} cartela={winning_cartela} calls={len(called_now)} reason={completion_reason} natural_winners={len(winner_entries)}")
                 return
@@ -572,7 +572,7 @@ async def _game_loop(round_id: str):
                 for uid in set(list(players.keys()) + [winner_id]):
                     try: await broadcast_event('users', str(uid))
                     except: pass
-                await _db(lambda: db.collection('rounds').document(round_id).update({'payout_processed': True}))
+                # payout_processed already set atomically inside end_round
                 return
 
             if completion_reason == 'no_winner_max_30':

@@ -1,10 +1,40 @@
 // ==================== GAME BOARD ====================
 var _announceTimeout = null;
+var _announceQueue = [];
+var _announceProcessing = false;
+
+// ==================== TAB VISIBILITY ====================
+(function() {
+    document.addEventListener('visibilitychange', function() {
+        if (document.visibilityState === 'visible') {
+            // Tab returned to foreground — re-sync timers
+            if (currentRoundId) {
+                db.collection('rounds').doc(currentRoundId).get().then(function(snap) {
+                    if (!snap.exists) return;
+                    var data = snap.data();
+                    if (data.status === 'playing') {
+                        var nextAt = data.next_number_at;
+                        if (nextAt) {
+                            var nextMs;
+                            if (typeof nextAt === 'object' && nextAt.toDate) nextMs = nextAt.toDate().getTime();
+                            else if (typeof nextAt === 'string') nextMs = new Date(nextAt).getTime();
+                            else if (typeof nextAt === 'object' && nextAt.seconds) nextMs = nextAt.seconds * 1000;
+                            else nextMs = new Date(nextAt).getTime();
+                            if (!isNaN(nextMs)) startGameCountdown(nextMs);
+                        }
+                    }
+                }).catch(function() {});
+            }
+        }
+    });
+})();
 function setupGameBoard() {
     const nums = Object.keys(myCartelas).map(Number);
     calledNumbers = new Set();
     _bingoDetected = false;
     _autoMarkGrids = null;
+    _announceQueue = [];
+    _announceProcessing = false;
     stopGameCountdown();
 
     var el;
@@ -335,6 +365,14 @@ function listenToRound(roundId) {
 }
 
 function showNumberAnnouncement(num) {
+    _announceQueue.push(num);
+    if (!_announceProcessing) _processAnnounceQueue();
+}
+
+function _processAnnounceQueue() {
+    if (_announceQueue.length === 0) { _announceProcessing = false; return; }
+    _announceProcessing = true;
+    var num = _announceQueue.shift();
     var letter = getNumberLetter(num);
     var color = getLetterColor(letter);
     var al = document.getElementById('announce-letter');
@@ -344,10 +382,14 @@ function showNumberAnnouncement(num) {
     if (an) an.textContent = num;
     if (na) na.classList.remove('hidden');
     if (_announceTimeout) clearTimeout(_announceTimeout);
+    var displayTime = _announceQueue.length > 0 ? 600 : 4500;
     _announceTimeout = setTimeout(function() {
-        if (na) na.classList.add('hidden');
+        if (_announceQueue.length === 0) {
+            if (na) na.classList.add('hidden');
+        }
         _announceTimeout = null;
-    }, 4500);
+        _processAnnounceQueue();
+    }, displayTime);
 }
 
 // ==================== BINGO CHECK ====================
@@ -538,6 +580,9 @@ function leaveGame() {
     try { stopGameCountdown(); } catch(e) {}
     try { stopSelectionCountdown(); } catch(e) {}
     if (winCountdownInterval) { clearInterval(winCountdownInterval); winCountdownInterval = null; }
+    _announceQueue = [];
+    _announceProcessing = false;
+    if (_announceTimeout) { clearTimeout(_announceTimeout); _announceTimeout = null; }
     myCartelas = {};
     calledNumbers = new Set();
     selectedCartelas = [];

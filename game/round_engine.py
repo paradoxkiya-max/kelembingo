@@ -236,53 +236,65 @@ class RoundEngine:
             'updated_at': datetime.now(tz=timezone.utc),
         })
 
-        # Second validation check right before update (reduce race condition window)
-        round_doc_final = self.rounds_ref.document(round_id).get()
-        if round_doc_final.exists:
-            round_data_final = round_doc_final.to_dict()
-            status_final = round_data_final.get('status')
-            called_final = round_data_final.get('called_numbers', [])
-            if status_final != 'selecting' and not (status_final == 'playing' and len(called_final) == 0):
-                # Rollback: refund the user
-                user_ref.update({
-                    'play_wallet': pw,
-                    'is_playing': False,
-                    'updated_at': datetime.now(tz=timezone.utc),
-                })
-                return {'error': 'Round is no longer accepting players'}
-
-            taken_final = set(round_data_final.get('taken_cartelas', []))
-            for num in cartela_numbers:
-                if num in taken_final:
+        # Everything after deduction is wrapped in try/except to guarantee
+        # automatic refund if any unhandled error occurs (DB failure, etc.)
+        try:
+            # Second validation check right before update (reduce race condition window)
+            round_doc_final = self.rounds_ref.document(round_id).get()
+            if round_doc_final.exists:
+                round_data_final = round_doc_final.to_dict()
+                status_final = round_data_final.get('status')
+                called_final = round_data_final.get('called_numbers', [])
+                if status_final != 'selecting' and not (status_final == 'playing' and len(called_final) == 0):
                     # Rollback: refund the user
                     user_ref.update({
                         'play_wallet': pw,
                         'is_playing': False,
                         'updated_at': datetime.now(tz=timezone.utc),
                     })
-                    return {'error': f'Cartela #{num} was just taken by another player. Please select different cards.'}
+                    return {'error': 'Round is no longer accepting players'}
 
-        new_pc = round_data.get('player_count', 0) + len(cartela_numbers)
-        total_pool = new_pc * round_stake
-        derash = total_pool * 0.75
+                taken_final = set(round_data_final.get('taken_cartelas', []))
+                for num in cartela_numbers:
+                    if num in taken_final:
+                        # Rollback: refund the user
+                        user_ref.update({
+                            'play_wallet': pw,
+                            'is_playing': False,
+                            'updated_at': datetime.now(tz=timezone.utc),
+                        })
+                        return {'error': f'Cartela #{num} was just taken by another player. Please select different cards.'}
 
-        self.rounds_ref.document(round_id).update({
-            f'players.{uid_str}': {
+            new_pc = round_data.get('player_count', 0) + len(cartela_numbers)
+
+            self.rounds_ref.document(round_id).update({
+                f'players.{uid_str}': {
+                    'cartelas': cartela_numbers,
+                    'name': user_name,
+                    'joined_at': datetime.now(tz=timezone.utc).isoformat(),
+                },
+                'player_count': Increment(len(cartela_numbers)),
+                'taken_cartelas': ArrayUnion(cartela_numbers),
+            })
+
+            return {
+                'status': 'joined',
+                'cost': total_cost,
                 'cartelas': cartela_numbers,
-                'name': user_name,
-                'joined_at': datetime.now(tz=timezone.utc).isoformat(),
-            },
-            'player_count': Increment(len(cartela_numbers)),
-            'taken_cartelas': ArrayUnion(cartela_numbers),
-            'derash': derash,
-        })
-
-        return {
-            'status': 'joined',
-            'cost': total_cost,
-            'cartelas': cartela_numbers,
-            'player_count': new_pc,
-        }
+                'player_count': new_pc,
+            }
+        except Exception as e:
+            # CRITICAL SAFETY NET: refund the user on any unexpected failure
+            logger.error(f"join_round_sync ROLLBACK for user {user_id} in round {round_id}: {e}")
+            try:
+                user_ref.update({
+                    'play_wallet': pw,
+                    'is_playing': False,
+                    'updated_at': datetime.now(tz=timezone.utc),
+                })
+            except Exception as refund_err:
+                logger.critical(f"REFUND FAILED for user {user_id}, amount {total_cost}: {refund_err}")
+            raise
 
     async def join_round(self, round_id: str, user_id: int, 
                          cartela_numbers: List[int], user_name: str) -> dict:

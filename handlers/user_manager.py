@@ -239,8 +239,25 @@ class UserManager:
             return {'ok': False, 'error': 'system_error'}
 
     async def get_user_history(self, user_id: int, limit: int = 10) -> list:
-        games = self.db.collection('games').where('user_id', '==', user_id).order_by('created_at', 'DESCENDING').limit(limit).get()
-        return [game.to_dict() for game in games]
+        """Get recent completed rounds the user participated in."""
+        uid_str = str(user_id)
+        try:
+            rounds = self.db.collection('rounds').where('status', '==', 'completed').get()
+            user_rounds = []
+            for doc in rounds:
+                rd = doc.to_dict()
+                players = rd.get('players', {})
+                if uid_str in players:
+                    rd['id'] = doc.id
+                    user_rounds.append(rd)
+            # Sort by completed_at descending
+            user_rounds.sort(
+                key=lambda r: r.get('completed_at', r.get('created_at', '')),
+                reverse=True,
+            )
+            return user_rounds[:limit]
+        except Exception:
+            return []
 
     async def get_all_users(self, limit: int = 100) -> list:
         users = self.users_ref.limit(limit).get()
