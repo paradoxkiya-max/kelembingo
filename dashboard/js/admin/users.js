@@ -53,7 +53,7 @@ function renderUsersTable() {
                 '<td class="px-4 py-3"><span class="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full ' + statusClass + '"><span class="w-1.5 h-1.5 rounded-full bg-current"></span>' + status + '</span></td>' +
                 '<td class="px-4 py-3"><div class="flex items-center gap-1">' +
                 '<button onclick="viewUser(\'' + escHtml(docId) + '\')" class="p-1.5 rounded-lg hover:bg-white/5 transition-all" title="View"><span class="text-sm">👁️</span></button>' +
-                '<button onclick="openEditBalance(\'' + escHtml(docId) + '\',\'' + escHtml(name) + '\',' + walletVal + ')" class="p-1.5 rounded-lg hover:bg-white/5 transition-all" title="Edit Balance"><span class="text-sm">💰</span></button>' +
+                '<button onclick="openEditBalance(\'' + escHtml(docId) + '\',\'' + escHtml(name) + '\',' + (Number(walletVal) || 0) + ')" class="p-1.5 rounded-lg hover:bg-white/5 transition-all" title="Edit Balance"><span class="text-sm">💰</span></button>' +
                 '<button onclick="toggleBanUser(\'' + escHtml(docId) + '\',\'' + escHtml(status) + '\')" class="p-1.5 rounded-lg hover:bg-red-500/10 transition-all" title="Ban/Unban"><span class="text-sm">' + (status === 'banned' ? '✅' : '🚫') + '</span></button>' +
                 '<button onclick="requestDeleteUser(\'' + escHtml(docId) + '\',\'' + escHtml(name) + '\')" class="p-1.5 rounded-lg hover:bg-red-500/10 transition-all" title="Delete"><span class="text-sm">🗑️</span></button>' +
                 '</div></td>' +
@@ -108,9 +108,11 @@ function viewUser(docId) {
 
 function openEditBalance(docId, name, balance) {
     editingUserId = docId;
+    var safeBal = (typeof balance === 'number') ? balance : (typeof balance === 'object' && balance ? Number(balance.value || 0) : Number(balance || 0));
+    if (isNaN(safeBal)) safeBal = 0;
     document.getElementById('editBalanceUser').textContent = name;
-    document.getElementById('editBalanceCurrent').textContent = balance.toFixed(2) + ' ETB';
-    document.getElementById('editBalanceInput').value = balance;
+    document.getElementById('editBalanceCurrent').textContent = safeBal.toFixed(2) + ' ETB';
+    document.getElementById('editBalanceInput').value = safeBal;
     openModal('editBalanceModal');
 }
 

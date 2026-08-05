@@ -513,6 +513,7 @@ function showWinModal(data, isWinner) {
         }).catch(function() {});
     }
 
+    if (winCountdownInterval) { clearInterval(winCountdownInterval); winCountdownInterval = null; }
     var winModal = document.getElementById('win-modal');
     var winCountdown = document.getElementById('win-countdown');
     if (winModal) winModal.classList.remove('hidden');
@@ -523,6 +524,7 @@ function showWinModal(data, isWinner) {
         if (winCountdown) winCountdown.textContent = secs;
         if (secs <= 0) {
             clearInterval(winCountdownInterval);
+            winCountdownInterval = null;
             if (winModal) winModal.classList.add('hidden');
             navigateTo('home');
         }
@@ -580,6 +582,8 @@ function leaveGame() {
     try { stopGameCountdown(); } catch(e) {}
     try { stopSelectionCountdown(); } catch(e) {}
     if (winCountdownInterval) { clearInterval(winCountdownInterval); winCountdownInterval = null; }
+    var winModal = document.getElementById('win-modal');
+    if (winModal) winModal.classList.add('hidden');
     _announceQueue = [];
     _announceProcessing = false;
     if (_announceTimeout) { clearTimeout(_announceTimeout); _announceTimeout = null; }

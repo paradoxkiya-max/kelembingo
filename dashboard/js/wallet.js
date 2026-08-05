@@ -167,8 +167,8 @@ async function submitWithdrawal() {
         var withdrawRef = db.collection('withdrawals').doc();
         batch.set(withdrawRef, {
             userId: String(currentUser.id),
-            firstName: currentUser.first_name,
-            username: currentUser.username,
+            firstName: currentUser.first_name || 'Player',
+            username: currentUser.username || '',
             amount: amount,
             phone: phone,
             telebirrName: name,

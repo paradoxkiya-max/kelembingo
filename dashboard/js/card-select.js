@@ -82,6 +82,7 @@ async function playNow(stake) {
                     completed_at: firebase.firestore.FieldValue.serverTimestamp()
                 }).catch(function() {});
                 hideLoading();
+                await new Promise(function(r) { setTimeout(r, 400); });
                 playNow(stake);
                 return;
             }
@@ -152,6 +153,7 @@ async function playNow(stake) {
                     completed_at: firebase.firestore.FieldValue.serverTimestamp()
                 }).catch(function() {});
                 hideLoading();
+                await new Promise(function(r) { setTimeout(r, 400); });
                 playNow(currentStake);
                 return;
             }
@@ -341,7 +343,7 @@ async function showCardSelection(roundId, roundData) {
                         payout_processed: true,
                         completed_at: firebase.firestore.FieldValue.serverTimestamp()
                     }).catch(function() {});
-                    playNow(currentStake);
+                    setTimeout(function() { playNow(currentStake); }, 400);
                     return;
                 }
                 var uid = String(currentUser.id);

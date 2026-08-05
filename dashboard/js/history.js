@@ -113,17 +113,17 @@ async function loadHistory() {
             if (wasPlayer && (d.player_count || 0) > 0) myRounds.push({ id: item.id, data: d });
         });
         
+        var myHeader = document.createElement('div');
+        myHeader.className = 'mb-3 mt-4';
+        myHeader.innerHTML = '<h3 class="text-sm font-bold text-white/60 mb-2">Your Games</h3>';
+        list.appendChild(myHeader);
+
         if (myRounds.length > 0) {
-            var myHeader = document.createElement('div');
-            myHeader.className = 'mb-3';
-            myHeader.innerHTML = '<h3 class="text-sm font-bold text-white/60 mb-2">Your Games</h3>';
-            list.appendChild(myHeader);
-            
             myRounds.forEach(function(item) {
                 var d = item.data;
                 var isWinner = (d.winners || []).includes(uidStr);
                 var el = document.createElement('div');
-                el.className = 'glass rounded-xl p-3';
+                el.className = 'glass rounded-xl p-3 mb-2';
                 var prize = isWinner ? (Math.round((d.prize_per_winner || 0) * 10) / 10) : 0;
                 var stake = d.stake || 10;
                 var date = _fmtDate(d.completed_at || d.created_at);
@@ -137,8 +137,11 @@ async function loadHistory() {
                     '</div>';
                 list.appendChild(el);
             });
-        } else if (recentWinners.length === 0) {
-            if (empty) empty.classList.remove('hidden');
+        } else {
+            var emptyPlayer = document.createElement('div');
+            emptyPlayer.className = 'glass rounded-xl p-4 text-center text-white/40 text-xs my-2';
+            emptyPlayer.textContent = 'No game history yet. Join a round to start playing!';
+            list.appendChild(emptyPlayer);
         }
     } catch (err) {
         if (loading) loading.classList.add('hidden');

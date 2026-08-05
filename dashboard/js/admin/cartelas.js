@@ -115,7 +115,7 @@ function loadCartelaPool() {
             for (var i = 0; i < 5; i++) mini += '<div class="' + hcls[i] + ' text-center text-[7px] font-bold">' + hdrs[i] + '</div>';
             for (var r = 0; r < 5; r++) {
                 for (var c = 0; c < 5; c++) {
-                    var v = flat[r * 5 + c];
+                    var v = (Array.isArray(flat[0]) ? flat[c][r] : flat[r * 5 + c]) || 0;
                     if (r === 2 && c === 2) mini += '<div class="bg-[#FF8C00]/20 text-[#FF8C00] text-center text-[7px] font-bold rounded">⭐</div>';
                     else mini += '<div class="bg-white/5 text-white/60 text-center text-[7px] font-bold rounded">' + v + '</div>';
                 }

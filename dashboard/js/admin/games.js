@@ -88,16 +88,14 @@ function renderGames() {
 
 function adminEndRound(roundId) {
     if (!confirm('End this round? No winner will be declared.')) return;
-    fetch(API_BASE + '/api/rounds/' + roundId + '/end', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ winner_ids: [] })
-    }).then(function () {
-        alert('Round ended.');
-    }).catch(function (e) {
-        console.error(e);
-        alert('Failed to end round.');
-    });
+    api('POST', '/api/rounds/' + roundId + '/end', { winner_ids: [] })
+        .then(function () {
+            showToast('✅ Round ended successfully.', 'success');
+        })
+        .catch(function (e) {
+            console.error(e);
+            alert('Failed to end round: ' + e.message);
+        });
 }
 
 function requestDeleteRound(roundId, shortId) {
