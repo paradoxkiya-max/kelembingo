@@ -35,7 +35,7 @@ async def _db(call):
 
 ALLOWED_ORIGINS = [
     "*",
-    "https://kelembingo-frontend.onrender.com",
+    "https://kelembingo-frontend-i8yy.onrender.com",
     "https://kelembingo-sqnv.onrender.com",
 ]
 

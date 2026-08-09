@@ -34,14 +34,16 @@ services:
         value: your_admin_password_here
     autoDeploy: true
 
-  # ── Bots: Telegram bot processes ──
-  - type: web
+  # ── Bots: Telegram bot processes (cron — keeps polling alive on free tier) ──
+  # Long-polling bots never exit, so Render stops the current run when the next
+  # scheduled run begins (bots restart each interval). No HTTP health check.
+  - type: cron
     name: kelembingo-bots
     runtime: docker
     plan: free
     dockerfilePath: ./Dockerfile.bot
     dockerContext: .
-    healthCheckPath: /
+    schedule: "*/5 * * * *"
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
@@ -50,7 +52,7 @@ services:
       - key: GATEWAY_URL
         value: https://kelembingo-sqnv.onrender.com
       - key: WEBAPP_URL
-        value: https://kelembingo-frontend.onrender.com/game
+        value: https://kelembingo-frontend-i8yy.onrender.com/game
       - key: INTERNAL_API_KEY
         value: your_internal_api_key_here
       - key: BOT_TOKEN
