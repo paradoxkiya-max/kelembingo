@@ -21,9 +21,32 @@ function countTotalPendingSelections(pendingSelections) {
 
 // ==================== PLAY NOW ====================
 var _playNowRunning = false;
+var _playNowReRun = false;
+
+function requestPlayNow(stake) {
+    // Re-entrancy-safe entry: if a playNow is already in flight, queue a rerun
+    // instead of silently swallowing the request.
+    if (_playNowRunning) { _playNowReRun = true; return; }
+    playNow(stake);
+}
+
+function closeEmptyRound(roundId) {
+    // Server-side, sanctioned cleanup for stale empty rounds (replaces the old
+    // client-side PATCH that force-completed round docs).
+    if (!roundId) return Promise.resolve();
+    var apiBase = window.BACKEND_URL || window.API_BASE || window.location.origin;
+    var path = '/api/rounds/' + roundId + '/close-empty';
+    if (window.playerApi) return window.playerApi('POST', path).catch(function() {});
+    return fetch(apiBase + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+    }).catch(function() {});
+}
+
 async function playNow(stake) {
     if (_playNowRunning) return;
     _playNowRunning = true;
+    _playNowReRun = false;
     if (!currentUser) { showToast('Loading user data...'); _playNowRunning = false; return; }
     stake = stake || currentStake || 10;
     if (VALID_STAKES.indexOf(stake) === -1) stake = 10;
@@ -71,19 +94,11 @@ async function playNow(stake) {
         if (roundData.status === 'playing') {
             var pc = roundData.player_count || 0;
             if (pc <= 0) {
-                // 0-player round in playing state — cancel and restart
-                db.collection('rounds').doc(roundId).update({
-                    status: 'completed',
-                    winners: [],
-                    winner_name: 'No players',
-                    prize_per_winner: 0,
-                    admin_profit: 0,
-                    payout_processed: true,
-                    completed_at: firebase.firestore.FieldValue.serverTimestamp()
-                }).catch(function() {});
+                // 0-player round in playing state — server-side cancel and restart
+                await closeEmptyRound(roundId);
                 hideLoading();
                 await new Promise(function(r) { setTimeout(r, 400); });
-                playNow(stake);
+                requestPlayNow(stake);
                 return;
             }
             if (roundData.players && roundData.players[String(currentUser.id)]) {
@@ -142,19 +157,11 @@ async function playNow(stake) {
                     showToast('Selection ended. Spectating...');
                     return;
                 }
-                // Stale round with no players — mark completed and create new round
-                db.collection('rounds').doc(roundId).update({
-                    status: 'completed',
-                    winners: [],
-                    winner_name: 'No players',
-                    prize_per_winner: 0,
-                    admin_profit: 0,
-                    payout_processed: true,
-                    completed_at: firebase.firestore.FieldValue.serverTimestamp()
-                }).catch(function() {});
+                // Stale round with no players — server-side close and create new round
+                await closeEmptyRound(roundId);
                 hideLoading();
                 await new Promise(function(r) { setTimeout(r, 400); });
-                playNow(currentStake);
+                requestPlayNow(currentStake);
                 return;
             }
         }
@@ -167,6 +174,10 @@ async function playNow(stake) {
         showToast('Error: ' + err.message);
     } finally {
         _playNowRunning = false;
+        if (_playNowReRun) {
+            _playNowReRun = false;
+            setTimeout(function() { requestPlayNow(currentStake); }, 100);
+        }
     }
 }
 
@@ -317,7 +328,7 @@ async function showCardSelection(roundId, roundData) {
                     myCartelas = {};
                     calledNumbers = new Set();
                     _previewCache = {};
-                    playNow(currentStake);
+                    requestPlayNow(currentStake);
                     return;
                 }
             }
@@ -327,23 +338,15 @@ async function showCardSelection(roundId, roundData) {
                 if (cs && cs.classList.contains('hidden')) return;
                 var livePC = rd.player_count || 0;
                 if (livePC <= 0) {
-                    // 0-player round started playing — cancel and restart
+                    // 0-player round started playing — server-side cancel and restart
                     if (roundUnsubscribe) { roundUnsubscribe(); roundUnsubscribe = null; }
                     stopSelectionCountdown();
                     selectedCartelas = [];
                     myCartelas = {};
                     calledNumbers = new Set();
                     _previewCache = {};
-                    db.collection('rounds').doc(roundId).update({
-                        status: 'completed',
-                        winners: [],
-                        winner_name: 'No players',
-                        prize_per_winner: 0,
-                        admin_profit: 0,
-                        payout_processed: true,
-                        completed_at: firebase.firestore.FieldValue.serverTimestamp()
-                    }).catch(function() {});
-                    setTimeout(function() { playNow(currentStake); }, 400);
+                    closeEmptyRound(roundId);
+                    setTimeout(function() { requestPlayNow(currentStake); }, 400);
                     return;
                 }
                 var uid = String(currentUser.id);
@@ -398,11 +401,11 @@ function toggleCardSelection(num, cell) {
         cell.className = 'card-tile';
         cell.style.boxShadow = '';
         // Tell server to unmark as pending
-        fetch(apiBase + '/api/rounds/' + currentRoundId + '/unselect', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user_id: currentUser.id, cartela_number: num })
-        }).catch(function() {});
+        if (window.playerApi) {
+            window.playerApi('POST', '/api/rounds/' + currentRoundId + '/unselect', {
+                user_id: currentUser.id, cartela_number: num
+            }).catch(function() {});
+        }
     } else {
         if (selectedCartelas.length >= MAX_CARTELAS) {
             showToast('Maximum ' + MAX_CARTELAS + ' cartelas!');
@@ -416,11 +419,11 @@ function toggleCardSelection(num, cell) {
         selectedCartelas.push(num);
         cell.className = 'card-tile selected';
         // Tell server to mark as pending (so other devices see TAKEN)
-        fetch(apiBase + '/api/rounds/' + currentRoundId + '/select', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user_id: currentUser.id, cartela_number: num })
-        }).catch(function() {});
+        if (window.playerApi) {
+            window.playerApi('POST', '/api/rounds/' + currentRoundId + '/select', {
+                user_id: currentUser.id, cartela_number: num
+            }).catch(function() {});
+        }
     }
     updateSelectedInfo();
     schedulePreviewRender();
@@ -665,15 +668,24 @@ async function confirmSelection() {
 
     try {
         var apiBase = window.BACKEND_URL || window.API_BASE || window.location.origin || (window.location.protocol + '//' + window.location.host);
-        var res = await fetch(apiBase + '/api/rounds/' + currentRoundId + '/join', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+        var res;
+        if (window.playerApi) {
+            res = await window.playerApi('POST', '/api/rounds/' + currentRoundId + '/join', {
                 user_id: currentUser.id,
                 cartela_numbers: selectedCartelas,
                 user_name: currentUser.first_name || 'Player'
-            })
-        });
+            });
+        } else {
+            res = await fetch(apiBase + '/api/rounds/' + currentRoundId + '/join', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user_id: currentUser.id,
+                    cartela_numbers: selectedCartelas,
+                    user_name: currentUser.first_name || 'Player'
+                })
+            });
+        }
 
         var data = await res.json();
         if (!res.ok) {
@@ -711,7 +723,7 @@ async function confirmSelection() {
         if (msg.indexOf('Spectating') !== -1 || msg.indexOf('already started') !== -1 || msg.indexOf('finished') !== -1) {
             showToast('Round ended just before your pick was confirmed. Finding new game...');
             if (roundUnsubscribe) { roundUnsubscribe(); roundUnsubscribe = null; }
-            playNow(currentStake);
+            requestPlayNow(currentStake);
         } else {
             showToast('Error: ' + msg);
         }

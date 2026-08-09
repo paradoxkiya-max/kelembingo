@@ -146,7 +146,7 @@ function startSelectionCountdown(deadlineMs) {
                 var cs = document.getElementById('card-select-screen');
                 if (cs && !cs.classList.contains('hidden')) {
                     cs.classList.add('hidden');
-                    playNow(currentStake);
+                    requestPlayNow(currentStake);
                 }
             }
         }
@@ -312,7 +312,7 @@ function processRoundSnapshot(data) {
             stopRoundPoll();
             isSpectator = false;
             showToast('No players in this round. Starting new game...');
-            setTimeout(async function() { await playNow(currentStake); }, 1500);
+            setTimeout(function() { requestPlayNow(currentStake); }, 1500);
             return;
         }
 
@@ -476,7 +476,7 @@ function handleRoundCompleted(data) {
         if (winnerName === 'No players') {
             isSpectator = false;
             showToast('No players joined. Starting new game...');
-            setTimeout(async function() { await playNow(currentStake); }, 1500);
+            setTimeout(function() { requestPlayNow(currentStake); }, 1500);
             return;
         } else {
             showToast('All numbers called! No winner this round.');

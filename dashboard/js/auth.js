@@ -7,6 +7,26 @@ function getTelegramUser() {
     return null;
 }
 
+function getTelegramInitData() {
+    if (tg && tg.initData && tg.initData.length > 10) return tg.initData;
+    return '';
+}
+
+async function bootstrapPlayerToken() {
+    var initData = getTelegramInitData();
+    if (!initData) return null;
+    var apiBase = window.BACKEND_URL || window.API_BASE || window.location.origin || (window.location.protocol + '//' + window.location.host);
+    var res = await fetch(apiBase + '/api/player/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ initData: initData })
+    });
+    if (!res.ok) throw new Error((await res.json().catch(function() { return {}; })).detail || 'Player auth failed');
+    var data = await res.json();
+    if (data.token) localStorage.setItem('playerToken', data.token);
+    return data;
+}
+
 async function initUser() {
     await startTimeSync();
 
@@ -34,6 +54,18 @@ async function initUser() {
 
     var uid = tgUser.id;
     try {
+        // Server-verified player session: validates initData, creates/refreshes the
+        // user doc server-side, and issues a short-lived player token used on all writes.
+        var authData = await bootstrapPlayerToken();
+        if (authData && authData.user) {
+            currentUser = { id: authData.user.id, ...authData.user };
+            updateAllDisplays();
+            listenToUserData();
+            startStatsListener();
+            if (!currentUser.phone && !currentUser.registered) showRegistration();
+            return;
+        }
+        // Fallback read path for already-provisioned users (legacy / dev).
         var userDoc = await db.collection('users').doc(String(uid)).get();
         if (userDoc.exists) {
             currentUser = { id: uid, ...userDoc.data() };

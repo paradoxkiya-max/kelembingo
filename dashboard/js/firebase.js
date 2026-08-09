@@ -73,6 +73,8 @@
         };
         const token = localStorage.getItem('token');
         if (token) opts.headers['Authorization'] = 'Bearer ' + token;
+        const playerToken = localStorage.getItem('playerToken');
+        if (playerToken) opts.headers['X-Player-Token'] = playerToken;
         if (body !== undefined) opts.body = JSON.stringify(body);
         const url = API_BASE ? (API_BASE + path) : path;
         return fetch(url, opts).then(async r => {
@@ -363,6 +365,16 @@
 
     // Expose API_BASE globally (admin scripts reference it directly)
     window.API_BASE = API_BASE;
+
+    // Player-authenticated fetch helper (sends X-Player-Token) for raw fetch calls.
+    window.playerApi = function(method, path, body) {
+        const opts = { method, headers: { 'Content-Type': 'application/json' } };
+        const t = localStorage.getItem('playerToken');
+        if (t) opts.headers['X-Player-Token'] = t;
+        if (body !== undefined) opts.body = JSON.stringify(body);
+        const url = API_BASE ? (API_BASE + path) : path;
+        return fetch(url, opts);
+    };
 
     // Expose socket for cartela pool real-time updates
     window._bingoSocket = socket;

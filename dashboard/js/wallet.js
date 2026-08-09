@@ -36,7 +36,12 @@ async function requestDeposit() {
     showLoading('Preparing deposit...');
     try {
         var apiBase = window.BACKEND_URL || window.API_BASE || window.location.origin || (window.location.protocol + '//' + window.location.host);
-        var res = await fetch(apiBase + '/api/deposits/config/' + encodeURIComponent(currentUser.id));
+        var res;
+        if (window.playerApi) {
+            res = await window.playerApi('GET', '/api/deposits/config/' + encodeURIComponent(currentUser.id));
+        } else {
+            res = await fetch(apiBase + '/api/deposits/config/' + encodeURIComponent(currentUser.id));
+        }
         var data = await res.json();
         if (!res.ok) {
             throw new Error(data.detail || 'Could not load deposit settings');
@@ -99,16 +104,26 @@ async function submitDeposit() {
     showLoading('Submitting deposit...');
     try {
         var apiBase = window.BACKEND_URL || window.API_BASE || window.location.origin || (window.location.protocol + '//' + window.location.host);
-        var res = await fetch(apiBase + '/api/deposits/submit', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+        var res;
+        if (window.playerApi) {
+            res = await window.playerApi('POST', '/api/deposits/submit', {
                 user_id: currentUser.id,
                 telebirr_name: name,
                 amount: amount,
                 transaction_id: transactionId
-            })
-        });
+            });
+        } else {
+            res = await fetch(apiBase + '/api/deposits/submit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user_id: currentUser.id,
+                    telebirr_name: name,
+                    amount: amount,
+                    transaction_id: transactionId
+                })
+            });
+        }
         var data = await res.json();
         if (!res.ok) {
             throw new Error(data.detail || 'Could not submit deposit');
@@ -138,7 +153,9 @@ async function submitWithdrawal() {
     if (!phone) { showToast('Enter phone number'); return; }
     try {
         const apiBase = window.BACKEND_URL || window.API_BASE || window.location.origin || (window.location.protocol + '//' + window.location.host);
-        const valRes = await fetch(apiBase + '/api/validate-withdrawal/' + currentUser.id + '?amount=' + amount);
+        const valRes = window.playerApi
+            ? await window.playerApi('GET', '/api/validate-withdrawal/' + currentUser.id + '?amount=' + amount)
+            : await fetch(apiBase + '/api/validate-withdrawal/' + currentUser.id + '?amount=' + amount);
         const val = await valRes.json();
         if (!val.ok) {
             const errorMessages = {
@@ -158,41 +175,36 @@ async function submitWithdrawal() {
             showToast(errorMessages[val.error] || 'Withdrawal not allowed (' + (val.error || 'error') + ')');
             return;
         }
-        var batch = db.batch();
-        var userRef = db.collection('users').doc(String(currentUser.id));
-        batch.update(userRef, {
-            play_wallet: firebase.firestore.FieldValue.increment(-amount),
-            updated_at: firebase.firestore.FieldValue.serverTimestamp()
-        });
-        var withdrawRef = db.collection('withdrawals').doc();
-        batch.set(withdrawRef, {
-            userId: String(currentUser.id),
-            firstName: currentUser.first_name || 'Player',
-            username: currentUser.username || '',
-            amount: amount,
-            phone: phone,
-            telebirrName: name,
-            status: 'pending',
-            createdAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
-        await batch.commit();
-        try {
-            await fetch(apiBase + '/api/admin/withdrawals/notify', {
+        // Server-side creation: wallet decrement + withdrawal doc + admin notify all
+        // happen atomically on the backend. No more client-side play_wallet writes.
+        var res;
+        if (window.playerApi) {
+            res = await window.playerApi('POST', '/api/withdrawals/create', {
+                amount: amount,
+                phone: phone,
+                telebirr_name: name
+            });
+        } else {
+            res = await fetch(apiBase + '/api/withdrawals/create', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    withdrawal_id: withdrawRef.id,
-                    user_id: currentUser.id,
-                    first_name: currentUser.first_name,
-                    username: currentUser.username,
-                    amount: amount,
-                    phone: phone,
-                    telebirr_name: name
-                })
+                body: JSON.stringify({ amount: amount, phone: phone, telebirr_name: name })
             });
-        } catch (e) { console.warn('Admin notification failed:', e); }
+        }
+        var data = await res.json();
+        if (!res.ok || data.error || !data.ok) {
+            const createMessages = {
+                insufficient: 'Insufficient balance for this withdrawal.',
+                no_phone: 'Please register with your phone number first.',
+                no_name: 'Enter your TeleBirr full name.',
+                invalid_amount: 'Please enter a valid withdrawal amount.'
+            };
+            showToast(createMessages[data.error] || data.detail || 'Could not submit withdrawal');
+            return;
+        }
         hideScreen('withdrawModal');
         showToast('Withdrawal request submitted!');
+        if (typeof loadWalletTransactions === 'function') loadWalletTransactions();
     } catch (err) { showToast('Error: ' + err.message); }
 }
 
