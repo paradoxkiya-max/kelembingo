@@ -13,7 +13,7 @@
 | CRITICAL | C4 | GatewayClient swallows errors → wallet wipes / silent failed writes | ✅ Implemented |
 | CRITICAL | C5 | Committed secrets in render.yaml & code defaults | ✅ Implemented |
 | CRITICAL | C7 | NaN/Inf bypasses every amount check | ✅ Implemented |
-| HIGH | H1 | Restart orphans `playing` rounds → game stuck, money locked | ✅ Implemented |
+| HIGH | H1 | Restart orphans `playing` rounds → game stuck, money locked | 🔜 Next |
 | HIGH | H5 | Join auto-creates users with free 270 ETB | ✅ Implemented |
 | HIGH | H3 | `/cancel` does not end conversations → accidental money moves | ✅ Implemented |
 | HIGH | H4 | `banned` flag never enforced | 🔜 Next |
@@ -66,19 +66,21 @@ payout guard → calling it repeatedly re-pays winners.
 
 ---
 
-## ✅ C3 — Backup pipeline on the right DB
+## ✅ C3 — Backup pipeline on the right DB (manual-only)
 
 **Problem:** bots service backs up its own *local* sqlite (stale copy). The gateway holds
-the live DB but runs no scheduler → every redeploy loses all data.
+the live DB but ran no scheduler → every redeploy loses all data. Auto-scheduling every
+`BACKUP_INTERVAL_MINUTES` also spammed the backup chat with snapshots.
 
-**Fix:**
-- `run_gateway.py`: add `auto_restore_on_startup()` + a backup scheduler thread (every
-  `BACKUP_INTERVAL_MINUTES`, default 1) operating on the **gateway's** DB.
-- `run_bots.py`: skip `auto_restore_on_startup()` and the backup scheduler when
-  `USE_GATEWAY=true` (their local DB is vestigial).
-- Keep the keep-alive ping (moved so it still runs in gateway mode).
+**Fix (manual-only by design):**
+- Backups are saved **only when the admin dashboard asks**: `POST /api/admin/backup/create`
+  (already wired to the "Create Backup" button in `dashboard/js/admin/backup.js`).
+- `run_gateway.py`: no scheduler thread — removed `start_backup_scheduler()` entirely;
+  keeps `auto_restore_on_startup()` (re-seeds only when the DB comes up empty on a fresh deploy).
+- `run_bots.py`: removed `run_backup_scheduler()` and the `BackupScheduler` subprocess.
+- `render.yaml`: dropped `BACKUP_INTERVAL_MINUTES`.
 
-**Files:** `run_gateway.py`, `run_bots.py`, `render.yaml` (env already on gateway).
+**Files:** `run_gateway.py`, `run_bots.py`, `render.yaml`, `dashboard/js/admin/backup.js` (existing).
 
 ---
 
@@ -126,11 +128,11 @@ minting infinite balance.
 
 ---
 
-## ✅ H1 — Resume `playing` rounds after restart
+## 🔜 H1 — Resume `playing` rounds after restart (NOT implemented yet)
 
 **Problem:** startup monitor only starts loops for `selecting` rounds.
 
-**Fix:** also `_start_game_loop()` for `playing` rounds with no active task; the loop
+**Fix (planned):** also `_start_game_loop()` for `playing` rounds with no active task; the loop
 already reconciles `next_number_at`/`called_numbers` from stored state.
 
 **Files:** `api/admin_api.py`.
@@ -185,5 +187,6 @@ New env vars (add on the relevant Render service):
 After deploy:
 1. Rotate every Telegram bot token listed in the audit (they were committed).
 2. Change `ADMIN_PASSWORD`.
-3. Run `POST /api/admin/backup/create` once to seed a fresh backup from the gateway.
+3. Click **Create Backup** in the admin dashboard (or run `POST /api/admin/backup/create`) to
+   seed a fresh snapshot from the gateway — backups are manual-only.
 4. Verify cache hit-rate logs on the bots service.

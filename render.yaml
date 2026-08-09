@@ -16,8 +16,6 @@ services:
         value: "1"
       - key: RENDER_API_ONLY
         value: "true"
-      - key: BACKUP_INTERVAL_MINUTES
-        value: "1"
       - key: INTERNAL_API_KEY
         value: your_internal_api_key_here
       - key: BOT_TOKEN
