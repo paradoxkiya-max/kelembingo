@@ -19,7 +19,7 @@ import datetime
 from config import db, BOT_TOKEN
 from firestore_db import MockFirestoreClient, SessionLocal, SystemEvent, FieldFilter, Increment, ArrayUnion
 
-from game.round_engine import RoundEngine, DEFAULT_STAKE, VALID_STAKES, SELECTION_DURATION, GAME_LENGTH_RANGE
+from game.round_engine import RoundEngine, DEFAULT_STAKE, VALID_STAKES, SELECTION_DURATION, GAME_LENGTH_RANGE, _parse_dt, _grid_next_number_at
 from handlers.user_manager import UserManager
 from handlers.bot_content import get_bot_text
 from datetime import datetime, date, timedelta, timezone
@@ -448,17 +448,36 @@ async def _game_loop(round_id: str):
                     await broadcast_event('rounds', round_id)
                 return
 
-            # Sleep until next_number_at for precise timing
-            next_at = data.get('next_number_at')
-            if next_at:
-                if isinstance(next_at, str):
-                    next_at = datetime.fromisoformat(next_at.replace('Z', '+00:00'))
-                elif isinstance(next_at, datetime):
-                    if next_at.tzinfo is None:
-                        next_at = next_at.replace(tzinfo=timezone.utc)
-                delay = (next_at - datetime.now(tz=timezone.utc)).total_seconds()
+            # Sleep until the strict 5s grid deadline (anchored to game_started_at).
+            # This keeps the cadence exact across the whole round and across devices —
+            # no drift from CPU/DB latency. If the grid fell far behind (e.g. after a
+            # long outage) re-anchor it to now so the game doesn't burst-fire numbers.
+            started = _parse_dt(data.get('game_started_at'))
+            called_count = len(data.get('called_numbers', []))
+            if started:
+                deadline = started + timedelta(seconds=(called_count + 1) * NUMBER_CALL_INTERVAL)
+                delay = (deadline - datetime.now(tz=timezone.utc)).total_seconds()
+                if delay > NUMBER_CALL_INTERVAL:
+                    new_start = datetime.now(tz=timezone.utc)
+                    await _db(lambda: db.collection('rounds').document(round_id).update({
+                        'game_started_at': new_start,
+                        'next_number_at': new_start + timedelta(seconds=(called_count + 1) * NUMBER_CALL_INTERVAL),
+                    }))
+                    deadline = new_start + timedelta(seconds=(called_count + 1) * NUMBER_CALL_INTERVAL)
+                    delay = (deadline - datetime.now(tz=timezone.utc)).total_seconds()
                 if delay > 0:
                     await asyncio.sleep(delay)
+            else:
+                next_at = data.get('next_number_at')
+                if next_at:
+                    if isinstance(next_at, str):
+                        next_at = datetime.fromisoformat(next_at.replace('Z', '+00:00'))
+                    elif isinstance(next_at, datetime):
+                        if next_at.tzinfo is None:
+                            next_at = next_at.replace(tzinfo=timezone.utc)
+                    delay = (next_at - datetime.now(tz=timezone.utc)).total_seconds()
+                    if delay > 0:
+                        await asyncio.sleep(delay)
 
             already_called = set(data.get('called_numbers', []))
             available = [n for n in BINGO_NUMBERS if n not in already_called]
@@ -503,7 +522,7 @@ async def _game_loop(round_id: str):
                     'called_numbers': called,
                     'last_called_number': number,
                     'last_called_at': now,
-                    'next_number_at': now + timedelta(seconds=NUMBER_CALL_INTERVAL),
+                    'next_number_at': _grid_next_number_at(data.get('game_started_at'), len(called)),
                 }))
                 await broadcast_event('rounds', round_id)
 
@@ -532,13 +551,13 @@ async def _game_loop(round_id: str):
 
             called_now = rd_after.get('called_numbers', [])
             players = rd_after.get('players', {})
-            player_cartelas = engine.build_player_cartelas(players)
-            winner_entries = engine.evaluate_winners(player_cartelas, called_now)
+            player_cartelas = await asyncio.to_thread(engine.build_player_cartelas, players)
+            winner_entries = await asyncio.to_thread(engine.evaluate_winners, player_cartelas, called_now)
             chosen_winner = None
             completion_reason = None
 
             if winner_entries:
-                chosen_winner = engine.choose_single_winner(winner_entries, players)
+                chosen_winner = await asyncio.to_thread(engine.choose_single_winner, winner_entries, players)
                 completion_reason = 'smart_single_winner' if len(winner_entries) == 1 else 'smart_tie_break_single_winner'
             elif len(called_now) >= MAX_SMART_CALLS:
                 completion_reason = 'no_winner_max_30'

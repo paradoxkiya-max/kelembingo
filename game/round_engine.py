@@ -30,6 +30,34 @@ GAME_LENGTH_RANGE = (15, 30)    # random target: each round ends between 15-30 n
 _CARTELA_CACHE = {}   # Global cache: cartela_number -> flat cartela list
 _PATTERN_CACHE = {}    # Global cache: tuple(flat_cartela) -> list of patterns
 
+
+def _parse_dt(value):
+    """Parse a stored datetime (ISO string or datetime) into a tz-aware datetime."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace('Z', '+00:00'))
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def _grid_next_number_at(game_started_at, calls_made: int) -> datetime:
+    """
+    Strict 5s cadence: the deadline for the NEXT call is anchored to the round's
+    game_started_at, not to when the previous call finished. This keeps intervals
+    exactly NUMBER_CALL_INTERVAL apart across the whole round (no drift) and makes
+    every device's countdown agree on the same absolute timeline.
+    """
+    started = _parse_dt(game_started_at)
+    now = datetime.now(tz=timezone.utc)
+    if started is None:
+        return now + timedelta(seconds=NUMBER_CALL_INTERVAL)
+    return started + timedelta(seconds=(calls_made + 1) * NUMBER_CALL_INTERVAL)
+
 class RoundEngine:
     def __init__(self, db):
         self.db = db
@@ -493,9 +521,16 @@ class RoundEngine:
 
     async def call_number(self, round_id: str) -> Optional[int]:
         """Call the next number for the round.
-        Phase 1 (calls 1-15): random safe numbers, avoid any winner.
+
+        Runs the CPU-heavy predictor in a worker thread so the asyncio event loop
+        stays responsive — this keeps Socket.IO broadcasts and the 5s cadence tight.
+        """
+        return await asyncio.to_thread(self._call_number_sync, round_id)
+
+    def _call_number_sync(self, round_id: str) -> Optional[int]:
+        """Phase 1 (calls 1-15): random safe numbers, avoid any winner.
         Phase 2 (calls 16+): target a winner and complete their pattern."""
-        round_doc = await self._db(lambda: self.rounds_ref.document(round_id).get())
+        round_doc = self.rounds_ref.document(round_id).get()
         if not round_doc.exists:
             return None
 
@@ -515,7 +550,7 @@ class RoundEngine:
         player_cartelas = self.build_player_cartelas(players)
 
         if data.get('game_target') != game_target:
-            await self._db(lambda: self.rounds_ref.document(round_id).update({'game_target': game_target}))
+            self.rounds_ref.document(round_id).update({'game_target': game_target})
 
         number = available[0]
 
@@ -524,9 +559,9 @@ class RoundEngine:
         if not target_winner:
             target_winner = self._select_predetermined_winner(player_cartelas)
             if target_winner:
-                await self._db(lambda: self.rounds_ref.document(round_id).update({
+                self.rounds_ref.document(round_id).update({
                     'target_winner': target_winner,
-                }))
+                })
 
         winning_pattern = set(target_winner.get('pattern', [])) if target_winner else set()
 
@@ -597,12 +632,12 @@ class RoundEngine:
 
         called.append(number)
         now = datetime.now(tz=timezone.utc)
-        await self._db(lambda: self.rounds_ref.document(round_id).update({
+        self.rounds_ref.document(round_id).update({
             'called_numbers': called,
             'last_called_number': number,
             'last_called_at': now,
-            'next_number_at': now + timedelta(seconds=NUMBER_CALL_INTERVAL),
-        }))
+            'next_number_at': _grid_next_number_at(data.get('game_started_at'), len(called)),
+        })
         return number
 
     def get_cartela_patterns(self, flat_cartela: List[int]) -> List[List[int]]:

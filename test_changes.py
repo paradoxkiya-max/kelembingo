@@ -169,8 +169,8 @@ def test_winner_collection():
         with open(api_path, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        has_evaluate = 'winner_entries = engine.evaluate_winners' in content
-        has_single_choice = 'chosen_winner = engine.choose_single_winner' in content
+        has_evaluate = 'engine.evaluate_winners' in content
+        has_single_choice = 'engine.choose_single_winner' in content
         has_forced_cap = "completion_reason = 'no_winner_max_30'" in content
         has_single_payout = "engine.end_round(round_id, [int(winner_id)])" in content
 

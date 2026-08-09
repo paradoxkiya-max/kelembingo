@@ -36,6 +36,7 @@ function setupGameBoard() {
     _announceQueue = [];
     _announceProcessing = false;
     stopGameCountdown();
+    stopRoundPoll();
 
     var el;
     if (el = document.getElementById('game-id-display')) el.textContent = '#' + (currentRoundId || '---').substring(0, 6);
@@ -282,86 +283,114 @@ function toggleAutoMark() {
 }
 
 // ==================== LISTEN TO ROUND (real-time) ====================
+function processRoundSnapshot(data) {
+    if (!data) return;
+    _lastRoundSnapTs = Date.now();
+
+    var elPlayers = document.getElementById('game-players');
+    var elDerash = document.getElementById('game-derash');
+    var elCalledCount = document.getElementById('game-called-count');
+    var elCountdown = document.getElementById('game-countdown');
+
+    var playerCount = data.player_count || 0;
+    var roundStake = data.stake || currentStake || 10;
+    var derash = Math.round(playerCount * roundStake * 0.75 * 10) / 10;
+    if (elPlayers) elPlayers.textContent = playerCount;
+    if (elDerash) elDerash.textContent = derash + ' ETB';
+    if (elCalledCount) elCalledCount.textContent = (data.called_numbers || []).length;
+
+    if (data.status === 'selecting') {
+        if (elCountdown) {
+            elCountdown.classList.remove('hidden');
+            elCountdown.textContent = 'Waiting for players...';
+        }
+    } else if (data.status === 'playing') {
+        if (elCountdown) elCountdown.classList.add('hidden');
+
+        if (playerCount <= 0) {
+            if (roundUnsubscribe) { roundUnsubscribe(); roundUnsubscribe = null; }
+            stopRoundPoll();
+            isSpectator = false;
+            showToast('No players in this round. Starting new game...');
+            setTimeout(async function() { await playNow(currentStake); }, 1500);
+            return;
+        }
+
+        var nextAt = data.next_number_at;
+        if (nextAt) {
+            var nextMs;
+            if (typeof nextAt === 'object' && nextAt.toDate) {
+                nextMs = nextAt.toDate().getTime();
+            } else if (typeof nextAt === 'string') {
+                nextMs = new Date(nextAt).getTime();
+            } else if (typeof nextAt === 'object' && nextAt._iso) {
+                nextMs = new Date(nextAt._iso).getTime();
+            } else if (typeof nextAt === 'object' && nextAt.seconds) {
+                nextMs = nextAt.seconds * 1000;
+            } else {
+                nextMs = new Date(nextAt).getTime();
+            }
+            if (!isNaN(nextMs)) {
+                startGameCountdown(nextMs);
+            }
+        }
+
+        var called = data.called_numbers || [];
+        var prevCount = calledNumbers.size;
+        for (var i = prevCount; i < called.length; i++) {
+            var num = called[i];
+            if (!calledNumbers.has(num)) {
+                calledNumbers.add(num);
+                var isLast = (i === called.length - 1);
+                highlightMasterNumber(num, isLast);
+                addCalledNumberTag(num);
+                autoMarkAllCartelas(num);
+                var _strip = document.getElementById('called-tags');
+                if (_strip) _strip.scrollLeft = _strip.scrollWidth;
+                if (isLast) {
+                    showNumberAnnouncement(num);
+                    playNumberSound(num);
+                }
+            }
+        }
+
+        if (called.length >= 4 && !isSpectator) {
+            checkMyBingo();
+        }
+    } else if (data.status === 'completed') {
+        handleRoundCompleted(data);
+    }
+}
+
+function stopRoundPoll() {
+    if (_roundPollInterval) {
+        clearInterval(_roundPollInterval);
+        _roundPollInterval = null;
+    }
+}
+
 function listenToRound(roundId) {
     if (roundUnsubscribe) roundUnsubscribe();
+    stopRoundPoll();
 
     roundUnsubscribe = db.collection('rounds').doc(roundId).onSnapshot(function(snap) {
         if (!snap.exists) return;
-        var data = snap.data();
-
-        var elPlayers = document.getElementById('game-players');
-        var elDerash = document.getElementById('game-derash');
-        var elCalledCount = document.getElementById('game-called-count');
-        var elCountdown = document.getElementById('game-countdown');
-
-        var playerCount = data.player_count || 0;
-        var roundStake = data.stake || currentStake || 10;
-        var derash = Math.round(playerCount * roundStake * 0.75 * 10) / 10;
-        if (elPlayers) elPlayers.textContent = playerCount;
-        if (elDerash) elDerash.textContent = derash + ' ETB';
-        if (elCalledCount) elCalledCount.textContent = (data.called_numbers || []).length;
-
-        if (data.status === 'selecting') {
-            if (elCountdown) {
-                elCountdown.classList.remove('hidden');
-                elCountdown.textContent = 'Waiting for players...';
-            }
-        } else if (data.status === 'playing') {
-            if (elCountdown) elCountdown.classList.add('hidden');
-
-            if (playerCount <= 0) {
-                if (roundUnsubscribe) { roundUnsubscribe(); roundUnsubscribe = null; }
-                isSpectator = false;
-                showToast('No players in this round. Starting new game...');
-                setTimeout(async function() { await playNow(currentStake); }, 1500);
-                return;
-            }
-
-            var nextAt = data.next_number_at;
-            if (nextAt) {
-                var nextMs;
-                if (typeof nextAt === 'object' && nextAt.toDate) {
-                    nextMs = nextAt.toDate().getTime();
-                } else if (typeof nextAt === 'string') {
-                    nextMs = new Date(nextAt).getTime();
-                } else if (typeof nextAt === 'object' && nextAt._iso) {
-                    nextMs = new Date(nextAt._iso).getTime();
-                } else if (typeof nextAt === 'object' && nextAt.seconds) {
-                    nextMs = nextAt.seconds * 1000;
-                } else {
-                    nextMs = new Date(nextAt).getTime();
-                }
-                if (!isNaN(nextMs)) {
-                    startGameCountdown(nextMs);
-                }
-            }
-
-            var called = data.called_numbers || [];
-            var prevCount = calledNumbers.size;
-            for (var i = prevCount; i < called.length; i++) {
-                var num = called[i];
-                if (!calledNumbers.has(num)) {
-                    calledNumbers.add(num);
-                    var isLast = (i === called.length - 1);
-                    highlightMasterNumber(num, isLast);
-                    addCalledNumberTag(num);
-                    autoMarkAllCartelas(num);
-                    var _strip = document.getElementById('called-tags');
-                    if (_strip) _strip.scrollLeft = _strip.scrollWidth;
-                    if (isLast) {
-                        showNumberAnnouncement(num);
-                        playNumberSound(num);
-                    }
-                }
-            }
-
-            if (called.length >= 4 && !isSpectator) {
-                checkMyBingo();
-            }
-        } else if (data.status === 'completed') {
-            handleRoundCompleted(data);
-        }
+        processRoundSnapshot(snap.data());
     });
+
+    // Realtime fallback: if the WebSocket drops, keep the board live by polling
+    // the round doc. Skipped entirely while the socket is connected (no extra load).
+    if (_roundPollInterval) clearInterval(_roundPollInterval);
+    _roundPollInterval = setInterval(function() {
+        if (document.hidden) return;
+        if (window._bingoSocket && window._bingoSocket.connected) return;
+        if (!currentRoundId) return;
+        db.collection('rounds').doc(currentRoundId).get().then(function(snap) {
+            if (snap.exists && Date.now() - _lastRoundSnapTs > 1500) {
+                processRoundSnapshot(snap.data());
+            }
+        }).catch(function() {});
+    }, 3000);
 }
 
 function showNumberAnnouncement(num) {
@@ -430,6 +459,7 @@ function checkBingoLocal(flat, called) {
 // ==================== ROUND COMPLETED ====================
 function handleRoundCompleted(data) {
     if (roundUnsubscribe) { roundUnsubscribe(); roundUnsubscribe = null; }
+    stopRoundPoll();
     stopGameCountdown();
     var na = document.getElementById('number-announce');
     if (na) na.classList.add('hidden');
