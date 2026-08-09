@@ -92,6 +92,16 @@ if __name__ == "__main__":
     except RuntimeError:
         pass
 
+    # The gateway service is flagged with RENDER_API_ONLY=true (it owns the DB,
+    # game loop and API — it must never start Telegram bots). If this entrypoint
+    # is invoked on that service (e.g. the wrong Dockerfile was picked), delegate
+    # to the real gateway entrypoint instead of running bots.
+    if os.getenv("RENDER_API_ONLY", "false").lower() == "true":
+        logger.info("🔀 RENDER_API_ONLY=true detected — running as Gateway API service, not bots.")
+        from run_gateway import main as gateway_main
+        gateway_main()
+        raise SystemExit(0)
+
     USE_GATEWAY = os.getenv("USE_GATEWAY", "false").lower() == "true"
 
     logger.info("🚀 Starting Kelem Bingo Bot Service...")

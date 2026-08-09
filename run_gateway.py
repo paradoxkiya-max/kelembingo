@@ -19,7 +19,7 @@ def auto_restore_on_startup():
         logger.warning(f"Startup restore error (continuing with empty DB): {e}")
 
 
-if __name__ == "__main__":
+def main():
     logger.info("🚀 Starting Kelem Bingo Gateway Service (API + Socket.IO + Embedded Engine)...")
 
     # Re-seed from the latest backup if this deploy came up with an empty DB.
@@ -38,3 +38,7 @@ if __name__ == "__main__":
     from api.admin_api import socket_app as app
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
+
+if __name__ == "__main__":
+    main()

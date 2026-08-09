@@ -36,7 +36,7 @@ async def _db(call):
 ALLOWED_ORIGINS = [
     "*",
     "https://kelembingo-frontend.onrender.com",
-    "https://kelembingo-gateway-gjfl.onrender.com",
+    "https://kelembingo-sqnv.onrender.com",
 ]
 
 # Additional origins that match by suffix

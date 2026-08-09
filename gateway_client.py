@@ -465,7 +465,7 @@ class GatewayClient:
 
     def __init__(self, gateway_url: str = None, api_key: str = None):
         self.gateway_url = (
-            gateway_url or os.getenv("GATEWAY_URL", "https://kelembingo-gateway-gjfl.onrender.com")
+            gateway_url or os.getenv("GATEWAY_URL", "https://kelembingo-sqnv.onrender.com")
         ).rstrip("/")
         self.api_key = api_key or os.getenv("INTERNAL_API_KEY", "")
         self.cache = CacheStore(

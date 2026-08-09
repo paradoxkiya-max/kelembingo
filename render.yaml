@@ -48,7 +48,7 @@ services:
       - key: USE_GATEWAY
         value: "true"
       - key: GATEWAY_URL
-        value: https://kelembingo-gateway-gjfl.onrender.com
+        value: https://kelembingo-sqnv.onrender.com
       - key: WEBAPP_URL
         value: https://kelembingo-frontend.onrender.com/game
       - key: INTERNAL_API_KEY
