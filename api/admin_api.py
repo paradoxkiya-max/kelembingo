@@ -1496,6 +1496,12 @@ class RestoreRequest(BaseModel):
     confirm: bool = False
 
 
+class BackupUploadRequest(BaseModel):
+    snapshot: dict
+    overwrite: bool = False
+    confirm: bool = False
+
+
 @app.get("/api/admin/backup/status")
 def backup_status():
     """Metadata about the latest pinned backup (no download)."""
@@ -1534,6 +1540,31 @@ def backup_restore(req: RestoreRequest):
         return {"ok": True, **result}
     except bc.BackupError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/admin/backup/upload")
+def backup_upload(req: BackupUploadRequest):
+    """
+    Restore the DB from a backup JSON file uploaded by the admin.
+
+    Accepts either a full backup snapshot ({"_meta": {...}, "data": {...}})
+    as produced by create_backup, or a bare export_all()-shaped dict
+    ({collection: {doc_id: data}}). This covers the case where the live DB
+    was wiped but a JSON backup still exists in Telegram: download it and
+    upload it here to restore. overwrite=True requires confirm=True.
+    """
+    import firestore_db
+    snap = req.snapshot if isinstance(req.snapshot, dict) else {}
+    data = snap.get("data") if ("data" in snap and "_meta" in snap) else snap
+    if not isinstance(data, dict) or not any(
+        isinstance(docs, dict) and docs for docs in data.values()
+    ):
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid backup snapshot.")
+    if req.overwrite and not req.confirm:
+        raise HTTPException(status_code=400, detail="Overwrite restore requires confirmation.")
+    stats = firestore_db.import_all(data, overwrite=req.overwrite)
+    stats["documents"] = sum(len(docs) for docs in data.values() if isinstance(docs, dict))
+    return {"ok": True, **stats}
 
 
 

@@ -757,7 +757,7 @@
     <div class="max-w-[900px] mx-auto mt-6">
         <div class="mb-6">
             <h3 class="text-2xl font-bold">Data Backup</h3>
-            <p class="text-gray-500 text-sm mt-1">Your database is snapshotted to the backup bot so nothing is lost when the server redeploys. Backups run automatically; you can also back up or restore manually here.</p>
+            <p class="text-gray-500 text-sm mt-1">Your database is snapshotted to a JSON backup pinned in Telegram so nothing is lost when the server redeploys. You can back up, restore from Telegram, or upload a backup file manually here.</p>
         </div>
 
         <!-- Status card -->
@@ -795,6 +795,21 @@
                     <span class="text-xs text-[#F59E0B]">Overwrite existing records (replaces live data)</span>
                 </label>
                 <button id="restoreBtn" onclick="runRestore()" class="btn-purple-g w-full py-3 rounded-xl text-sm font-semibold">Restore From Backup</button>
+            </div>
+            <div class="glass rounded-2xl p-6 md:col-span-2">
+                <h4 class="text-lg font-bold mb-2 flex items-center gap-2">
+                    <span class="w-8 h-8 rounded-lg bg-[#10B981]/10 flex items-center justify-center text-sm">📤</span>
+                    Upload &amp; Restore from File
+                </h4>
+                <p class="text-xs text-gray-500 mb-4">Restore from a downloaded backup <code class="text-gray-300">.json</code> (e.g. the file saved in Telegram) — useful if the live database was wiped or the Telegram pin is unreachable.</p>
+                <div class="flex flex-col md:flex-row md:items-center gap-3">
+                    <input type="file" id="backupFile" accept=".json,application/json" class="block w-full text-xs text-gray-400 file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:bg-[#10B981]/10 file:text-[#10B981] file:text-xs file:font-semibold hover:file:bg-[#10B981]/20 cursor-pointer">
+                    <label class="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap">
+                        <input type="checkbox" id="backupUploadOverwrite" class="w-4 h-4 accent-[#8B5CF6]">
+                        <span class="text-xs text-[#F59E0B]">Overwrite existing records</span>
+                    </label>
+                    <button id="restoreFileBtn" onclick="runRestoreFromFile()" class="btn-grad md:ml-auto px-6 py-3 rounded-xl text-sm font-semibold">Upload &amp; Restore</button>
+                </div>
             </div>
         </div>
 

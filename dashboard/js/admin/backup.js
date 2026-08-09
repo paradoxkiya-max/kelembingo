@@ -75,3 +75,55 @@ function runRestore() {
             if (btn) { btn.disabled = false; btn.textContent = 'Restore From Backup'; }
         });
 }
+
+function runRestoreFromFile() {
+    var fileInput = document.getElementById('backupFile');
+    var file = fileInput && fileInput.files && fileInput.files[0];
+    if (!file) {
+        showToast('❌ Choose a backup JSON file first.');
+        return;
+    }
+    var overwrite = !!document.getElementById('backupUploadOverwrite').checked;
+    var msg = overwrite
+        ? 'Uploaded restore will REPLACE current records with the file contents. Continue?'
+        : 'Uploaded restore will only ADD missing records from the file. Continue?';
+    if (!confirm(msg)) return;
+
+    var btn = document.getElementById('restoreFileBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Uploading…'; }
+
+    function _done() {
+        if (btn) { btn.disabled = false; btn.textContent = 'Upload & Restore'; }
+        if (fileInput) fileInput.value = '';
+    }
+
+    var reader = new FileReader();
+    reader.onload = function (e) {
+        var snapshot;
+        try {
+            snapshot = JSON.parse(e.target.result);
+        } catch (err) {
+            showToast('❌ Not a valid JSON file: ' + err.message);
+            _done();
+            return;
+        }
+        api('POST', '/api/admin/backup/upload', { snapshot: snapshot, overwrite: overwrite, confirm: overwrite })
+            .then(function (r) {
+                var parts = [];
+                if (r.inserted) parts.push(r.inserted + ' added');
+                if (r.overwritten) parts.push(r.overwritten + ' replaced');
+                if (r.skipped) parts.push(r.skipped + ' kept');
+                showToast('✅ Restored from file' + (parts.length ? ' — ' + parts.join(', ') : '') + '.');
+                loadBackupStatus();
+            })
+            .catch(function (err) {
+                showToast('❌ Upload restore failed: ' + err.message);
+            })
+            .finally(_done);
+    };
+    reader.onerror = function () {
+        showToast('❌ Could not read the file.');
+        _done();
+    };
+    reader.readAsText(file);
+}

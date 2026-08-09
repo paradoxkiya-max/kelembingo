@@ -1,4 +1,10 @@
 // ==================== HISTORY ====================
+function _fmtPrize(x) {
+    var n = Number(x);
+    if (!isFinite(n) || isNaN(n)) return '0.00';
+    return (Math.round(n * 100) / 100).toFixed(2);
+}
+
 function _fmtDate(ts) {
     if (!ts) return '';
     try {
@@ -38,6 +44,7 @@ async function loadHistory() {
     try {
         var winnerSnap = await db.collection('rounds')
             .where('status', '==', 'completed')
+            .orderBy('completed_at', 'desc')
             .limit(50).get();
         
         if (loading) loading.classList.add('hidden');
@@ -64,11 +71,15 @@ async function loadHistory() {
             if (d.winners && d.winners.length > 0 && d.winner_name && d.winner_name !== 'No players') {
                 var date = _fmtDate(d.completed_at);
                 if (recentWinners.length < 3) {
+                    var cartela = d.winning_cartela;
+                    var cartelaText = '';
+                    if (Array.isArray(cartela) && cartela.length) cartelaText = 'Cartela #' + cartela.join(', ');
+                    else if (cartela !== undefined && cartela !== null && cartela !== '') cartelaText = 'Cartela #' + cartela;
                     recentWinners.push({
                         name: d.winner_name,
-                        prize: Math.round((d.prize_per_winner || 0) * 10) / 10,
+                        prize: _fmtPrize(d.prize_per_winner || 0),
                         date: date,
-                        cartela: Array.isArray(d.winning_cartela) ? d.winning_cartela.join(', ') : (d.winning_cartela || '?'),
+                        cartelaText: cartelaText,
                         stake: d.stake || 10
                     });
                 }
@@ -90,7 +101,7 @@ async function loadHistory() {
                     '<div class="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold" style="background: linear-gradient(135deg, #FFD700, #FF8C00); color: #1a1a2e;">&#127942;</div>' +
                     '<div>' +
                     '<div class="text-sm font-bold text-white">' + w.name + '</div>' +
-                    '<div class="text-[10px] text-white/40">Cartela #' + w.cartela + ' &middot; ' + w.stake + ' ETB &middot; ' + w.date + '</div>' +
+                    '<div class="text-[10px] text-white/40">' + (w.cartelaText ? w.cartelaText + ' &middot; ' : '') + w.stake + ' ETB &middot; ' + w.date + '</div>' +
                     '</div>' +
                     '</div>' +
                     '<div class="text-right">' +
@@ -124,15 +135,16 @@ async function loadHistory() {
                 var isWinner = (d.winners || []).includes(uidStr);
                 var el = document.createElement('div');
                 el.className = 'glass rounded-xl p-3 mb-2';
-                var prize = isWinner ? (Math.round((d.prize_per_winner || 0) * 10) / 10) : 0;
+                var prize = isWinner ? _fmtPrize(d.prize_per_winner || 0) : '0.00';
                 var stake = d.stake || 10;
                 var date = _fmtDate(d.completed_at || d.created_at);
+                var myCartelas = (d.players && d.players[uidStr] && d.players[uidStr].cartelas) ? d.players[uidStr].cartelas.length : 0;
                 el.innerHTML = '<div class="flex items-center justify-between mb-1">' +
                     '<span class="text-sm font-bold ' + (isWinner ? 'text-bingo-green' : 'text-red-400') + '">' + (isWinner ? '&#127942; Won!' : '&#10060; Lost') + '</span>' +
                     '<span class="text-xs text-white/40">' + stake + ' ETB &middot; ' + date + '</span>' +
                     '</div>' +
                     '<div class="flex items-center justify-between text-xs text-white/60">' +
-                    '<span>Cartelas: ' + (d.player_count || 0) + '</span>' +
+                    '<span>Cartelas: ' + myCartelas + '</span>' +
                     '<span>Derash: ' + prize + ' ETB</span>' +
                     '</div>';
                 list.appendChild(el);
