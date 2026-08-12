@@ -275,23 +275,16 @@ class UserManager:
         user = await self.get_user(user_id)
         if not user:
             return False
-        
-        is_already_registered = bool(user.get('registered')) and bool(user.get('phone'))
-        play_wallet = user.get('play_wallet', 0)
-        
-        # Give 10 ETB welcome bonus on first time registration
-        if not is_already_registered:
-            play_wallet += 10
-            
-        self.users_ref.document(str(user_id)).update({
-            'first_name': name,
-            'phone': phone,
-            'telebirr_name': telebirr_name,
-            'registered': True,
-            'play_wallet': play_wallet,
-            'updated_at': datetime.now(tz=timezone.utc),
-        })
-        return True
+        import settlement
+        result = settlement.register_user(
+            self.db,
+            user_id,
+            name,
+            phone,
+            telebirr_name,
+            idempotency_key=f"registration:{user_id}:{phone}",
+        )
+        return bool(result.get("ok"))
 
     async def is_registered(self, user_id: int) -> bool:
         user = await self.get_user(user_id)
@@ -328,57 +321,35 @@ class UserManager:
             'first_name': user.get('first_name', ''),
         }
 
-    async def transfer_funds(self, sender_id: int, recipient_id: int, amount: float) -> bool:
-        if sender_id == recipient_id:
-            return False
+    async def transfer_funds(self, sender_id: int, recipient_id: int, amount: float, idempotency_key: str = None) -> bool:
         amount = finite_amount(amount)
-        if amount is None or amount <= 0:
+        if amount is None or amount <= 0 or sender_id == recipient_id:
             return False
-        sender_ref = self.users_ref.document(str(sender_id))
-        recipient_ref = self.users_ref.document(str(recipient_id))
-        transaction = self.db.transaction()
+        import settlement
+        result = settlement.transfer_funds(
+            self.db,
+            sender_id,
+            recipient_id,
+            amount,
+            idempotency_key=idempotency_key,
+        )
+        return bool(result.get("ok"))
 
-        @firestore_transactional
-        def _transfer(txn):
-            sender_snap = sender_ref.get(transaction=txn)
-            recipient_snap = recipient_ref.get(transaction=txn)
-            if not sender_snap.exists or not recipient_snap.exists:
-                return False
-            sender_data = sender_snap.to_dict()
-            if sender_data.get('play_wallet', 0) < amount:
-                return False
-            txn.update(sender_ref, {
-                'play_wallet': sender_data['play_wallet'] - amount,
-                'updated_at': datetime.now(tz=timezone.utc),
-            })
-            recipient_data = recipient_snap.to_dict()
-            txn.update(recipient_ref, {
-                'play_wallet': recipient_data.get('play_wallet', 0) + amount,
-                'updated_at': datetime.now(tz=timezone.utc),
-            })
-            return True
-
-        return _transfer(transaction)
-
-    async def convert_bonus(self, user_id: int, rate: int = 10) -> Optional[float]:
+    async def convert_bonus(self, user_id: int, rate: int = 10, idempotency_key: str = None) -> Optional[float]:
         user = await self.get_user(user_id)
         if not user:
-            return None
-        coins = user.get('bonus', 0)
-        if coins <= 0:
             return None
         rate = finite_amount(rate)
         if rate is None or rate <= 0:
             return None
-        etb = coins / rate
-        if not math.isfinite(etb):
-            return None
-        self.users_ref.document(str(user_id)).update({
-            'bonus': 0,
-            'play_wallet': user.get('play_wallet', 0) + etb,
-            'updated_at': datetime.now(tz=timezone.utc),
-        })
-        return etb
+        import settlement
+        result = settlement.convert_bonus(
+            self.db,
+            user_id,
+            rate,
+            idempotency_key=idempotency_key,
+        )
+        return result.get("etb") if result.get("ok") else None
 
     async def set_referred_by(self, new_user_id: int, referrer_id: int) -> bool:
         """Attribute a referrer to a user, but only once (never overwrite)."""
