@@ -4,6 +4,7 @@ import re
 import math
 import hashlib
 import asyncio
+import uuid
 from urllib.parse import quote
 from datetime import datetime, timezone
 
@@ -30,6 +31,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 user_manager = UserManager(db)
+_withdraw_locks = {}
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets')
 
 # ─── Conversation states ───
@@ -345,7 +347,8 @@ async def deposit_txn_number(update: Update, context: ContextTypes.DEFAULT_TYPE)
     amount = context.user_data.get('deposit_amount', 0)
     telebirr_name = context.user_data.get('telebirr_name', '')
 
-    # Check duplicate transaction number
+    # Keep this quick duplicate check for a friendly response, but the shared
+    # creator below is the authoritative atomic check for concurrent requests.
     dup = db.collection('deposits').where('transactionId', '==', txn_number).limit(1).get()
     if dup:
         await update.effective_message.reply_text(get_bot_text('deposit_duplicate_txn', db), reply_markup=MAIN_KEYBOARD)
@@ -364,9 +367,12 @@ async def deposit_txn_number(update: Update, context: ContextTypes.DEFAULT_TYPE)
         'processedAt': None,
         'adminNote': '',
     }
-    deposit_ref = db.collection('deposits').document()
-    deposit_ref.set(deposit_data)
-    deposit_id = deposit_ref.id
+    from settlement import create_deposit
+    created = create_deposit(db, deposit_data)
+    if not created.get("ok"):
+        await update.effective_message.reply_text(get_bot_text('deposit_duplicate_txn', db), reply_markup=MAIN_KEYBOARD)
+        return ConversationHandler.END
+    deposit_id = created["deposit_id"]
 
     context.user_data.pop('deposit_amount', None)
     context.user_data.pop('telebirr_name', None)
@@ -481,35 +487,56 @@ async def withdraw_telebirr_name(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def _process_withdraw(update, context, uid, amount, phone):
-    u = await user_manager.get_user(uid)
-    if not u:
-        await update.effective_message.reply_text(get_bot_text('play_need_start', db), reply_markup=MAIN_KEYBOARD)
-        return ConversationHandler.END
+    lock = _withdraw_locks.get(uid)
+    if lock is None:
+        lock = asyncio.Lock()
+        _withdraw_locks[uid] = lock
 
-    user_ref = db.collection('users').document(str(uid))
-    user_ref.update({'play_wallet': Increment(-amount), 'updated_at': datetime.now(tz=timezone.utc)})
+    async with lock:
+        u = await user_manager.get_user(uid)
+        if not u:
+            await update.effective_message.reply_text(get_bot_text('play_need_start', db), reply_markup=MAIN_KEYBOARD)
+            return ConversationHandler.END
 
-    withdrawal_data = {
-        'userId': str(uid),
-        'username': update.effective_user.username or '',
-        'firstName': update.effective_user.first_name or '',
-        'telebirrName': context.user_data.get('telebirr_name', '') if u else '',
-        'amount': amount,
-        'phone': phone,
-        'status': 'pending',
-        'createdAt': datetime.now(tz=timezone.utc),
-        'processedAt': None,
-        'adminNote': '',
-    }
-    ref = db.collection('withdrawals').document()
-    ref.set(withdrawal_data)
+        validation = await user_manager.validate_withdrawal(uid, amount)
+        if not validation.get('ok'):
+            error_key = f"withdraw_{validation.get('error')}"
+            kwargs = {k: v for k, v in validation.items() if k not in ('ok', 'error')}
+            await update.effective_message.reply_text(get_bot_text(error_key, db, **kwargs))
+            return ConversationHandler.END
+
+        withdrawal_data = {
+            'userId': str(uid),
+            'username': update.effective_user.username or '',
+            'firstName': update.effective_user.first_name or '',
+            'telebirrName': context.user_data.get('telebirr_name', ''),
+            'amount': amount,
+            'phone': phone,
+            'status': 'pending',
+            'createdAt': datetime.now(tz=timezone.utc),
+            'processedAt': None,
+            'adminNote': '',
+        }
+        request_key = context.user_data.setdefault(
+            'withdraw_idempotency_key',
+            f"telegram:{uid}:{uuid.uuid4().hex}",
+        )
+        from settlement import create_withdrawal
+        created = create_withdrawal(db, withdrawal_data, request_key)
+        if not created.get('ok'):
+            error_key = f"withdraw_{created.get('error')}"
+            await update.effective_message.reply_text(get_bot_text(error_key, db), reply_markup=MAIN_KEYBOARD)
+            context.user_data.pop('withdraw_idempotency_key', None)
+            return ConversationHandler.END
+        withdrawal_id = created['withdrawal_id']
+        context.user_data.pop('withdraw_idempotency_key', None)
 
     await update.effective_message.reply_text(
-        get_bot_text('withdraw_submitted', db, amount=amount, phone=phone, withdrawal_id=ref.id),
+        get_bot_text('withdraw_submitted', db, amount=amount, phone=phone, withdrawal_id=withdrawal_id),
         reply_markup=MAIN_KEYBOARD, parse_mode='Markdown',
     )
 
-    await _notify_admin_withdrawal(withdrawal_data, ref.id, context)
+    await _notify_admin_withdrawal(withdrawal_data, withdrawal_id, context)
     return ConversationHandler.END
 
 
@@ -584,6 +611,7 @@ async def transfer_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return TRANSFER_AMOUNT
 
     context.user_data['transfer_amount'] = amount
+    context.user_data['transfer_operation_key'] = f"telegram-transfer:{uid}:{uuid.uuid4().hex}"
     to_name = context.user_data.get('transfer_to_name', 'Unknown')
 
     kb = InlineKeyboardMarkup([
@@ -609,7 +637,12 @@ async def transfer_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     recipient_id = context.user_data.get('transfer_to')
     amount = context.user_data.get('transfer_amount', 0)
 
-    success = await user_manager.transfer_funds(uid, recipient_id, amount)
+    success = await user_manager.transfer_funds(
+        uid,
+        recipient_id,
+        amount,
+        idempotency_key=context.user_data.get('transfer_operation_key'),
+    )
     if success:
         to_name = context.user_data.get('transfer_to_name', 'Unknown')
         await query.edit_message_text(
@@ -642,6 +675,7 @@ async def handle_convert_bonus(update: Update, context: ContextTypes.DEFAULT_TYP
     etb = coins / rate
     context.user_data['convert_etb'] = etb
     context.user_data['convert_coins'] = coins
+    context.user_data['convert_operation_key'] = f"telegram-bonus:{uid}:{uuid.uuid4().hex}"
 
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton(f"✅ Convert {coins} coins → {etb} ETB", callback_data="bonus_yes"),
@@ -664,7 +698,11 @@ async def bonus_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     uid = query.from_user.id
     rate = get_config_value("cfg_bonus_to_etb_rate", db, as_type=int)
-    etb = await user_manager.convert_bonus(uid, rate)
+    etb = await user_manager.convert_bonus(
+        uid,
+        rate,
+        idempotency_key=context.user_data.get('convert_operation_key'),
+    )
     if etb is not None:
         await query.edit_message_text(get_bot_text('bonus_converted', db, etb=etb))
     else:
@@ -828,26 +866,24 @@ async def admin_approve_deposit(update: Update, context: ContextTypes.DEFAULT_TY
         return
     deposit_id = query.data.replace("approve_", "")
     try:
-        ref = db.collection('deposits').document(deposit_id)
-        doc = ref.get()
-        if not doc.exists:
-            await query.edit_message_text(get_bot_text('admin_deposit_not_found', db))
+        from settlement import settle_deposit
+        settled = settle_deposit(db, deposit_id, "approved")
+        if not settled.get("ok"):
+            if settled.get("error") == "already_processed":
+                await query.edit_message_text(get_bot_text('admin_already_processed', db, status=settled.get('status')))
+            elif settled.get("error") == "not_found":
+                await query.edit_message_text(get_bot_text('admin_deposit_not_found', db))
+            else:
+                await query.edit_message_text(get_bot_text('admin_error', db, error=settled.get('error', 'settlement failed')))
             return
-        data = doc.to_dict()
-        if data.get('status') != 'pending':
-            await query.edit_message_text(get_bot_text('admin_already_processed', db, status=data.get('status')))
-            return
-        ref.update({'status': 'approved', 'processedAt': datetime.now(tz=timezone.utc)})
-        user_id = data.get('userId')
-        amount = data.get('amount', 0)
-        if user_id and amount > 0:
-            user_ref = db.collection('users').document(str(user_id))
-            user_ref.update({'play_wallet': Increment(amount), 'updated_at': datetime.now(tz=timezone.utc)})
+        user_id = settled.get('user_id')
+        amount = settled.get('amount', 0)
+        if user_id:
             try:
                 await context.bot.send_message(chat_id=int(user_id), text=get_bot_text('deposit_approved', db, amount=amount))
             except Exception:
                 pass
-        await query.edit_message_text(get_bot_text('admin_deposit_approved', db, first_name=data.get('firstName', '?'), amount=amount))
+        await query.edit_message_text(get_bot_text('admin_deposit_approved', db, first_name=settled.get('first_name', '?'), amount=amount))
     except Exception as e:
         logger.error(f"Error approving deposit: {e}")
         await query.edit_message_text(get_bot_text('admin_error', db, error=str(e)[:100]))
@@ -860,23 +896,23 @@ async def admin_reject_deposit(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     deposit_id = query.data.replace("reject_", "")
     try:
-        ref = db.collection('deposits').document(deposit_id)
-        doc = ref.get()
-        if not doc.exists:
-            await query.edit_message_text(get_bot_text('admin_deposit_not_found', db))
+        from settlement import settle_deposit
+        settled = settle_deposit(db, deposit_id, "rejected")
+        if not settled.get("ok"):
+            if settled.get("error") == "already_processed":
+                await query.edit_message_text(get_bot_text('admin_already_processed', db, status=settled.get('status')))
+            elif settled.get("error") == "not_found":
+                await query.edit_message_text(get_bot_text('admin_deposit_not_found', db))
+            else:
+                await query.edit_message_text(get_bot_text('admin_error', db, error=settled.get('error', 'settlement failed')))
             return
-        data = doc.to_dict()
-        if data.get('status') != 'pending':
-            await query.edit_message_text(get_bot_text('admin_already_processed', db, status=data.get('status')))
-            return
-        ref.update({'status': 'rejected', 'processedAt': datetime.now(tz=timezone.utc)})
-        user_id = data.get('userId')
+        user_id = settled.get('user_id')
         if user_id:
             try:
                 await context.bot.send_message(chat_id=int(user_id), text=get_bot_text('deposit_rejected', db))
             except Exception:
                 pass
-        await query.edit_message_text(get_bot_text('admin_deposit_rejected', db, first_name=data.get('firstName', '?')))
+        await query.edit_message_text(get_bot_text('admin_deposit_rejected', db, first_name=settled.get('first_name', '?')))
     except Exception as e:
         logger.error(f"Error rejecting deposit: {e}")
         await query.edit_message_text(get_bot_text('admin_error', db, error=str(e)[:100]))
@@ -889,24 +925,24 @@ async def admin_approve_withdraw(update: Update, context: ContextTypes.DEFAULT_T
         return
     wid = query.data.replace("approve_withdraw_", "")
     try:
-        ref = db.collection('withdrawals').document(wid)
-        doc = ref.get()
-        if not doc.exists:
-            await query.edit_message_text(get_bot_text('admin_withdrawal_not_found', db))
+        from settlement import settle_withdrawal
+        settled = settle_withdrawal(db, wid, "approved")
+        if not settled.get("ok"):
+            if settled.get("error") == "already_processed":
+                await query.edit_message_text(get_bot_text('admin_already_processed', db, status=settled.get('status')))
+            elif settled.get("error") == "not_found":
+                await query.edit_message_text(get_bot_text('admin_withdrawal_not_found', db))
+            else:
+                await query.edit_message_text(get_bot_text('admin_error', db, error=settled.get('error', 'settlement failed')))
             return
-        data = doc.to_dict()
-        if data.get('status') != 'pending':
-            await query.edit_message_text(get_bot_text('admin_already_processed', db, status=data.get('status')))
-            return
-        ref.update({'status': 'approved', 'processedAt': datetime.now(tz=timezone.utc)})
-        user_id = data.get('userId')
-        amount = data.get('amount', 0)
+        user_id = settled.get('user_id')
+        amount = settled.get('amount', 0)
         if user_id:
             try:
                 await context.bot.send_message(chat_id=int(user_id), text=get_bot_text('withdraw_approved', db, amount=amount))
             except Exception:
                 pass
-        await query.edit_message_text(get_bot_text('admin_withdrawal_approved', db, first_name=data.get('firstName', '?'), amount=amount))
+        await query.edit_message_text(get_bot_text('admin_withdrawal_approved', db, first_name=settled.get('first_name', '?'), amount=amount))
     except Exception as e:
         logger.error(f"Error approving withdrawal: {e}")
         await query.edit_message_text(get_bot_text('admin_error', db, error=str(e)[:100]))
@@ -919,27 +955,24 @@ async def admin_reject_withdraw(update: Update, context: ContextTypes.DEFAULT_TY
         return
     wid = query.data.replace("reject_withdraw_", "")
     try:
-        ref = db.collection('withdrawals').document(wid)
-        doc = ref.get()
-        if not doc.exists:
-            await query.edit_message_text(get_bot_text('admin_withdrawal_not_found', db))
+        from settlement import settle_withdrawal
+        settled = settle_withdrawal(db, wid, "rejected")
+        if not settled.get("ok"):
+            if settled.get("error") == "already_processed":
+                await query.edit_message_text(get_bot_text('admin_already_processed', db, status=settled.get('status')))
+            elif settled.get("error") == "not_found":
+                await query.edit_message_text(get_bot_text('admin_withdrawal_not_found', db))
+            else:
+                await query.edit_message_text(get_bot_text('admin_error', db, error=settled.get('error', 'settlement failed')))
             return
-        data = doc.to_dict()
-        if data.get('status') != 'pending':
-            await query.edit_message_text(get_bot_text('admin_already_processed', db, status=data.get('status')))
-            return
-        ref.update({'status': 'rejected', 'processedAt': datetime.now(tz=timezone.utc)})
-        user_id = data.get('userId')
-        amount = data.get('amount', 0)
-        if user_id and amount > 0:
-            user_ref = db.collection('users').document(str(user_id))
-            user_ref.update({'play_wallet': Increment(amount), 'updated_at': datetime.now(tz=timezone.utc)})
+        user_id = settled.get('user_id')
+        amount = settled.get('amount', 0)
         if user_id:
             try:
                 await context.bot.send_message(chat_id=int(user_id), text=get_bot_text('withdraw_rejected', db, amount=amount))
             except Exception:
                 pass
-        await query.edit_message_text(get_bot_text('admin_withdrawal_rejected', db, first_name=data.get('firstName', '?'), amount=amount))
+        await query.edit_message_text(get_bot_text('admin_withdrawal_rejected', db, first_name=settled.get('first_name', '?'), amount=amount))
     except Exception as e:
         logger.error(f"Error rejecting withdrawal: {e}")
         await query.edit_message_text(get_bot_text('admin_error', db, error=str(e)[:100]))

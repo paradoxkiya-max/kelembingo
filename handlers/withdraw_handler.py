@@ -91,32 +91,13 @@ async def process_telebirr_number(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text(get_bot_text(error_key, db, **kwargs))
         return
 
-    withdrawal_data = {
-        "userId": str(uid),
-        "username": user.username or "unknown",
-        "firstName": user.first_name,
-        "amount": amount,
-        "telebirrNumber": telebirr,
-        "status": "pending",
-        "createdAt": datetime.now(tz=timezone.utc),
-        "processedAt": None,
-        "adminNote": ""
-    }
-
-    user_ref = db.collection("users").document(str(uid))
-    user_doc = user_ref.get()
-    current_balance = user_doc.to_dict().get("play_wallet", 0)
-    user_ref.update({"play_wallet": current_balance - amount, "updated_at": datetime.now(tz=timezone.utc)})
-
-    doc_ref = db.collection("withdrawals").add(withdrawal_data)
-    withdrawal_id = doc_ref[0].id
-
+    # Keep this legacy handler safe if it is ever registered again. The live
+    # bot flow owns the per-user lock, revalidation, debit, and pending record.
+    from bot import _process_withdraw
+    context.user_data["telebirr_name"] = telebirr
+    result = await _process_withdraw(update, context, uid, amount, telebirr)
     context.user_data.pop("withdraw_amount", None)
     context.user_data.pop("awaiting_withdraw_amount", None)
     context.user_data.pop("awaiting_telebirr_number", None)
-
-    await update.message.reply_text(
-        get_bot_text('withdraw_submitted', db, amount=amount, phone=telebirr, withdrawal_id=withdrawal_id),
-        parse_mode='Markdown'
-    )
-    logger.info(f"Withdrawal request {withdrawal_id} created for user {uid}")
+    context.user_data.pop("telebirr_name", None)
+    return result

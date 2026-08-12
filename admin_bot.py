@@ -1,4 +1,5 @@
 import os
+import asyncio
 import logging
 from datetime import datetime, timezone
 from dotenv import load_dotenv
@@ -8,6 +9,8 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+_deposit_locks = {}
+_withdrawal_locks = {}
 
 from config import db
 import firestore_db as firestore
@@ -134,38 +137,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Process deposit
 # ═══════════════════════════════════════════════════════════════════
 async def process_deposit(deposit_id, status, query):
+    lock = _deposit_locks.setdefault(deposit_id, asyncio.Lock())
+    async with lock:
+        return await _process_deposit_impl(deposit_id, status, query)
+
+
+async def _process_deposit_impl(deposit_id, status, query):
     try:
-        ref = db.collection('deposits').document(deposit_id)
-        result = {}
-
-        @firestore.transactional
-        def _txn(transaction, ref, status):
-            doc = ref.get(transaction=transaction)
-            if not doc.exists:
-                raise Exception("Deposit not found.")
-            data = doc.to_dict()
-            if data.get('status') != 'pending':
-                raise Exception(f"Already {data.get('status')}.")
-            transaction.update(ref, {
-                'status': status,
-                'processedAt': datetime.now(tz=timezone.utc),
-            })
-            user_id = data.get('userId')
-            amount = data.get('amount', 0)
-            if status == "approved" and user_id and amount > 0:
-                user_ref = db.collection('users').document(str(user_id))
-                transaction.update(user_ref, {
-                    'play_wallet': firestore.Increment(amount),
-                    'updated_at': datetime.now(tz=timezone.utc),
-                })
-            result['user_id'] = user_id
-            result['amount'] = amount
-            return data
-
-        transaction = db.transaction()
-        data = _txn(transaction, ref, status)
-        user_id = result.get('user_id')
-        amount = result.get('amount', 0)
+        from settlement import settle_deposit
+        settled = settle_deposit(db, deposit_id, status)
+        if not settled.get("ok"):
+            raise Exception(settled.get("error", "Deposit settlement failed"))
+        data = {"firstName": settled.get("first_name", "?")}
+        user_id = settled.get("user_id")
+        amount = settled.get("amount", 0)
 
         # Notify user via game bot
         try:
@@ -212,38 +197,20 @@ async def process_deposit(deposit_id, status, query):
 # Process withdrawal
 # ═══════════════════════════════════════════════════════════════════
 async def process_withdrawal(wid, status, query, context):
+    lock = _withdrawal_locks.setdefault(wid, asyncio.Lock())
+    async with lock:
+        return await _process_withdrawal_impl(wid, status, query, context)
+
+
+async def _process_withdrawal_impl(wid, status, query, context):
     try:
-        ref = db.collection('withdrawals').document(wid)
-        result = {}
-
-        @firestore.transactional
-        def _txn(transaction, ref, status):
-            doc = ref.get(transaction=transaction)
-            if not doc.exists:
-                raise Exception("Withdrawal not found.")
-            data = doc.to_dict()
-            if data.get('status') != 'pending':
-                raise Exception(f"Already {data.get('status')}.")
-            transaction.update(ref, {
-                'status': status,
-                'processedAt': datetime.now(tz=timezone.utc),
-            })
-            user_id = data.get('userId')
-            amount = data.get('amount', 0)
-            if status == "rejected" and user_id and amount > 0:
-                user_ref = db.collection('users').document(str(user_id))
-                transaction.update(user_ref, {
-                    'play_wallet': firestore.Increment(amount),
-                    'updated_at': datetime.now(tz=timezone.utc),
-                })
-            result['user_id'] = user_id
-            result['amount'] = amount
-            return data
-
-        transaction = db.transaction()
-        data = _txn(transaction, ref, status)
-        user_id = result.get('user_id')
-        amount = result.get('amount', 0)
+        from settlement import settle_withdrawal
+        settled = settle_withdrawal(db, wid, status)
+        if not settled.get("ok"):
+            raise Exception(settled.get("error", "Withdrawal settlement failed"))
+        data = {"firstName": settled.get("first_name", "?")}
+        user_id = settled.get("user_id")
+        amount = settled.get("amount", 0)
 
         # Notify user
         try:

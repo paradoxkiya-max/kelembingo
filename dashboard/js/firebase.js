@@ -56,6 +56,16 @@
     // Track active subscriptions for reconnection
     var _activeSubscriptions = [];
 
+    function _socketSubscription(collection, docId) {
+        var sub = { collection: collection };
+        if (docId !== undefined && docId !== null) sub.doc_id = docId;
+        var playerToken = localStorage.getItem('playerToken');
+        var adminToken = localStorage.getItem('token');
+        if (playerToken) sub.player_token = playerToken;
+        if (adminToken) sub.admin_token = adminToken;
+        return sub;
+    }
+
     if (socket) {
         socket.on('connect', function() {
             // Re-subscribe to all active subscriptions on reconnect
@@ -150,7 +160,7 @@
 
         onSnapshot(onNext, onError) {
             var self = this;
-            var sub = { collection: self._collection, doc_id: self.id };
+            var sub = _socketSubscription(self._collection, self.id);
             var eventName = 'snapshot';
             var handler = null;
 
@@ -237,7 +247,7 @@
             var handler = null;
 
             // Subscribe to collection room (if Socket.IO available)
-            var subData = { collection: this._collection };
+            var subData = _socketSubscription(this._collection);
             if (socket) {
                 try { socket.emit('subscribe', subData); } catch(e) {}
             }

@@ -19,22 +19,26 @@ services:
       # Exactly one Render service must own round progression.
       - key: GAME_ENGINE_ENABLED
         value: "true"
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_AUTH_SECRET
+        sync: false
       - key: INTERNAL_API_KEY
-        value: your_internal_api_key_here
+        sync: false
       - key: BOT_TOKEN
-        value: your_bot_token_here
+        sync: false
       - key: ADMIN_BOT_TOKEN
-        value: your_admin_bot_token_here
+        sync: false
       - key: ADMIN_CHAT_ID
-        value: "8462274722"
+        sync: false
       - key: BACKUP_BOT_TOKEN
-        value: your_backup_bot_token_here
+        sync: false
       - key: BACKUP_CHAT_ID
-        value: "8462274722"
+        sync: false
       - key: ADMIN_USERNAME
         value: "paradox"
       - key: ADMIN_PASSWORD
-        value: your_admin_password_here
+        sync: false
     autoDeploy: true
 
   # ── Bots: Telegram bot processes (cron — keeps polling alive on free tier) ──

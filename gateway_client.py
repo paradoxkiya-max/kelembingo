@@ -18,6 +18,7 @@ import hashlib
 import threading
 import logging
 import requests
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
@@ -494,3 +495,102 @@ class GatewayClient:
     def is_gateway_down(self) -> bool:
         """True if the most recent request to the gateway failed with a network/5xx error."""
         return is_gateway_down()
+
+    def _settle(self, collection: str, document_id: str, status: str, note: str = "") -> dict:
+        path = f"/api/internal/settlements/{collection}/{quote(str(document_id), safe='')}/{status}"
+        if note:
+            path += "?note=" + quote(str(note), safe="")
+        response = _request_with_retry(
+            "POST",
+            f"{self.gateway_url}{path}",
+            headers={"Content-Type": "application/json", "X-Internal-Key": self.api_key},
+            timeout=20,
+        )
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {"ok": False, "error": response.text[:200]}
+        if response.status_code >= 400:
+            raise GatewayUnavailableError(payload.get("detail", "Gateway settlement failed"))
+        return payload
+
+    def _internal_post(self, path: str, payload: dict) -> dict:
+        response = _request_with_retry(
+            "POST",
+            f"{self.gateway_url}{path}",
+            json=payload,
+            headers={"Content-Type": "application/json", "X-Internal-Key": self.api_key},
+            timeout=20,
+        )
+        try:
+            result = response.json()
+        except ValueError:
+            result = {"ok": False, "error": response.text[:200]}
+        if response.status_code >= 400:
+            raise GatewayUnavailableError(result.get("detail", "Gateway operation failed"))
+        return result
+
+    def transfer_funds(self, sender_id, recipient_id, amount, idempotency_key=None) -> dict:
+        return self._internal_post("/api/internal/accounts/transfer", {
+            "sender_id": str(sender_id),
+            "recipient_id": str(recipient_id),
+            "amount": amount,
+            "idempotency_key": idempotency_key,
+        })
+
+    def convert_bonus(self, user_id, rate=10, idempotency_key=None) -> dict:
+        return self._internal_post("/api/internal/accounts/convert-bonus", {
+            "user_id": str(user_id),
+            "rate": rate,
+            "idempotency_key": idempotency_key,
+        })
+
+    def register_user(self, user_id, name, phone, telebirr_name="", idempotency_key=None) -> dict:
+        return self._internal_post("/api/internal/accounts/register", {
+            "user_id": str(user_id),
+            "name": name,
+            "phone": phone,
+            "telebirr_name": telebirr_name,
+            "idempotency_key": idempotency_key,
+        })
+
+    def create_withdrawal(self, withdrawal_data: dict, idempotency_key: str = None) -> dict:
+        payload = dict(withdrawal_data)
+        if idempotency_key:
+            payload["idempotencyKey"] = idempotency_key
+        response = _request_with_retry(
+            "POST",
+            f"{self.gateway_url}/api/internal/withdrawals/create",
+            json=payload,
+            headers={"Content-Type": "application/json", "X-Internal-Key": self.api_key},
+            timeout=20,
+        )
+        try:
+            result = response.json()
+        except ValueError:
+            result = {"ok": False, "error": response.text[:200]}
+        if response.status_code >= 400:
+            raise GatewayUnavailableError(result.get("detail", "Gateway withdrawal creation failed"))
+        return result
+
+    def create_deposit(self, deposit_data: dict) -> dict:
+        response = _request_with_retry(
+            "POST",
+            f"{self.gateway_url}/api/internal/deposits/create",
+            json=deposit_data,
+            headers={"Content-Type": "application/json", "X-Internal-Key": self.api_key},
+            timeout=20,
+        )
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {"ok": False, "error": response.text[:200]}
+        if response.status_code >= 400:
+            raise GatewayUnavailableError(payload.get("detail", "Gateway deposit creation failed"))
+        return payload
+
+    def settle_deposit(self, deposit_id: str, status: str, note: str = "") -> dict:
+        return self._settle("deposits", deposit_id, status, note)
+
+    def settle_withdrawal(self, withdrawal_id: str, status: str, note: str = "") -> dict:
+        return self._settle("withdrawals", withdrawal_id, status, note)

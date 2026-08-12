@@ -119,16 +119,26 @@ def create_backup() -> dict:
         _call("unpinAllChatMessages", data={"chat_id": BACKUP_CHAT_ID})
     except BackupError:
         pass  # No previous pin or no permission — not critical
+    pinned = False
     try:
+        if not message_id:
+            raise BackupError("Telegram upload returned no message_id")
         _call("pinChatMessage", data={
             "chat_id": BACKUP_CHAT_ID,
             "message_id": message_id,
             "disable_notification": True,
         })
+        pinned = True
     except BackupError as e:
-        logger.warning(f"Backup uploaded but could not be pinned: {e}")
+        # The document was uploaded, but startup restore discovers backups via
+        # the pinned message. Do not report a successful recoverable backup.
+        logger.error(f"Backup uploaded but could not be pinned: {e}")
+        raise BackupError(
+            "Backup upload succeeded but pinning failed; grant the backup bot "
+            "pin permission and retry before relying on recovery."
+        ) from e
 
-    meta["pinned"] = True
+    meta["pinned"] = pinned
     meta["message_id"] = message_id
     meta["file_size"] = len(raw)
     logger.info(f"Backup created: {meta['documents']} records, {len(raw)} bytes")

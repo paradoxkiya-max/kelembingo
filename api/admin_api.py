@@ -38,28 +38,6 @@ async def _db(call):
     return await asyncio.to_thread(call)
 
 
-def _refund_no_winner_players(players: dict, stake: float, now) -> float:
-    """Refund every player's deducted stake back to their play_wallet when a round ends
-    with no winner. Returns the total amount refunded."""
-    total = 0.0
-    for uid_str, p_info in (players or {}).items():
-        cartelas = (p_info or {}).get('cartelas') or []
-        refund = float(stake) * len(cartelas)
-        if refund <= 0:
-            continue
-        user_ref = db.collection('users').document(uid_str)
-        user_doc = user_ref.get()
-        if user_doc.exists:
-            ud = user_doc.to_dict()
-            user_ref.update({
-                'play_wallet': (ud.get('play_wallet', 0) or 0) + refund,
-                'losses': ud.get('losses', 0) + 1,
-                'is_playing': False,
-                'updated_at': now,
-            })
-            total += refund
-    return total
-
 ALLOWED_ORIGINS = [
     "*",
     "https://kelembingo-frontend-i8yy.onrender.com",
@@ -170,7 +148,9 @@ AUTH_SECRET = os.getenv("ADMIN_AUTH_SECRET") or os.getenv("INTERNAL_API_KEY") or
 INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
 AUTH_TOKEN_TTL = int(os.getenv("ADMIN_AUTH_TTL_HOURS", "12")) * 3600
 PROTECTED_DB_COLLECTIONS = {"admins", "system", "settings", "bot_content"}
-PUBLIC_ADMIN_PATHS = {"/api/admin/login", "/api/admin/withdrawals/notify"}
+PUBLIC_ADMIN_PATHS = {"/api/admin/login"}
+PUBLIC_DB_READ_COLLECTIONS = {"rounds", "cartelas_master", "cartelas"}
+PLAYER_DB_QUERY_COLLECTIONS = {"deposits", "withdrawals"}
 
 
 def _b64e(b: bytes) -> str:
@@ -229,6 +209,7 @@ async def require_auth(request: Request):
 
 # ─── Player Auth (Telegram WebApp initData) ───
 PLAYER_AUTH_TTL = int(os.getenv("PLAYER_AUTH_TTL_HOURS", "24")) * 3600
+PLAYER_INITDATA_MAX_AGE = int(os.getenv("PLAYER_INITDATA_MAX_AGE_SECONDS", "86400"))
 # Fields a player may never write directly (server-owned money/stats)
 PLAYER_IMMUTABLE_USER_FIELDS = {"play_wallet", "balance", "bonus", "wins", "losses",
                                 "total_games", "is_playing", "user_id"}
@@ -252,8 +233,21 @@ def _verify_telegram_init_data(init_data: str) -> Optional[dict]:
     received_hash = params.pop("hash", None)
     if not received_hash:
         return None
+    auth_date_raw = params.get("auth_date")
+    try:
+        auth_date = int(auth_date_raw)
+    except (TypeError, ValueError):
+        return None
+    age = time.time() - auth_date
+    if age < -300 or age > PLAYER_INITDATA_MAX_AGE:
+        logger.warning("[PlayerAuth] Telegram initData is outside the allowed auth_date window")
+        return None
     if not BOT_TOKEN:
-        logger.warning("[PlayerAuth] BOT_TOKEN not set — accepting unverified initData (dev mode)")
+        allow_unverified = os.getenv("ALLOW_UNVERIFIED_INITDATA", "false").lower() == "true"
+        if not allow_unverified:
+            logger.error("[PlayerAuth] BOT_TOKEN is not configured; refusing unverified initData")
+            return None
+        logger.warning("[PlayerAuth] Accepting unverified initData because ALLOW_UNVERIFIED_INITDATA=true")
         try:
             user = json.loads(params.get("user", "{}"))
         except Exception:
@@ -300,11 +294,50 @@ def _auth_any(request: Request) -> Optional[dict]:
     return None
 
 
+def _require_internal(request: Request) -> dict:
+    """Require the server-to-server key; browser admin sessions are not enough."""
+    identity = _auth_ok(request)
+    if not identity or identity.get("role") != "internal":
+        raise HTTPException(status_code=403, detail="Internal service access required")
+    return identity
+
+
+def _require_admin_or_internal(request: Request) -> dict:
+    """Require an admin session or the server-to-server internal key."""
+    identity = _auth_any(request)
+    if not identity:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if identity.get("kind") != "admin" or identity.get("role") not in {"internal", "admin", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Admin or internal access required")
+    return identity
+
+
+def _get_user_operation_lock(user_id: int) -> asyncio.Lock:
+    lock = _user_operation_locks.get(user_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _user_operation_locks[user_id] = lock
+    return lock
+
+
+def _is_banned_user(data: Optional[dict]) -> bool:
+    if not isinstance(data, dict):
+        return False
+    return bool(data.get("banned")) or str(data.get("status", "")).lower() == "banned"
+
+
+def _ensure_player_active(user_id: int) -> None:
+    snap = db.collection("users").document(str(user_id)).get()
+    if snap.exists and _is_banned_user(snap.to_dict()):
+        raise HTTPException(status_code=403, detail="Account is banned")
+
+
 def _require_player(request: Request) -> int:
     """Require a valid player token and return the verified user_id."""
     player = _player_ok(request)
     if not player:
         raise HTTPException(status_code=401, detail="Unauthorized")
+    _ensure_player_active(player["user_id"])
     return player["user_id"]
 
 
@@ -314,6 +347,7 @@ def _actor_user_id(request: Request, fallback: int) -> int:
     if not identity:
         raise HTTPException(status_code=401, detail="Unauthorized")
     if identity.get("kind") == "player":
+        _ensure_player_active(identity["user_id"])
         return identity["user_id"]
     return fallback
 
@@ -346,6 +380,7 @@ def _upsert_player_user(user: dict) -> dict:
         "wins": 0,
         "losses": 0,
         "is_playing": False,
+        "active_round_id": None,
         "created_at": now,
         "updated_at": now,
     }
@@ -364,6 +399,8 @@ async def player_auth(req: PlayerAuthRequest):
     if not user:
         raise HTTPException(status_code=401, detail="Invalid Telegram session")
     user_data = await _db(lambda: _upsert_player_user(user))
+    if _is_banned_user(user_data):
+        raise HTTPException(status_code=403, detail="Account is banned")
     token = _create_player_token(int(user["id"]))
     await broadcast_event("users", str(user["id"]))
     return {
@@ -458,6 +495,7 @@ def get_server_time():
 
 # ─── Background game loop state ───
 _active_game_tasks = {}  # round_id -> asyncio.Task
+_user_operation_locks = {}  # user_id -> asyncio.Lock for wallet operations in this process
 BINGO_NUMBERS = list(range(1, 76))
 NUMBER_CALL_INTERVAL = 5  # seconds
 
@@ -660,27 +698,20 @@ async def _game_loop(round_id: str):
             available = [n for n in BINGO_NUMBERS if n not in already_called]
 
             if not available:
-                player_count = data.get('player_count', 0)
-                now = datetime.now(tz=timezone.utc)
-                def _update_losses():
-                    refunded = _refund_no_winner_players(
-                        data.get('players', {}),
-                        data.get('stake', DEFAULT_STAKE),
-                        now,
+                from settlement import refund_no_winner
+                result = await _db(lambda: refund_no_winner(
+                    db,
+                    round_id,
+                    data.get('players', {}),
+                    data.get('stake', DEFAULT_STAKE),
+                ))
+                if result.get('ok'):
+                    logger.info(
+                        f"[GameLoop] {round_id}: all 75 numbers called with no winner — "
+                        f"refunded {result.get('amount', 0)} ETB"
                     )
-                    logger.info(f"[GameLoop] {round_id}: all 75 numbers called with no winner — refunded {refunded} ETB")
-                    return refunded
-                await _db(_update_losses)
-                await _db(lambda: db.collection('rounds').document(round_id).update({
-                    'status': 'completed',
-                    'winners': [],
-                    'winner_name': 'No winner',
-                    'prize_per_winner': 0,
-                    'admin_profit': 0,
-                    'refunded': True,
-                    'payout_processed': True,
-                    'completed_at': now,
-                }))
+                else:
+                    logger.error(f"[GameLoop] No-winner refund failed for {round_id}: {result}")
                 await broadcast_event('rounds', round_id)
                 return
 
@@ -771,26 +802,24 @@ async def _game_loop(round_id: str):
                 return
 
             if completion_reason == 'no_winner_max_30':
-                now = datetime.now(tz=timezone.utc)
-                logger.info(f"[GameLoop] No real winner for {round_id} after {len(called_now)} calls — ending with no winner")
-                def _end_no_winner():
-                    refunded = _refund_no_winner_players(
-                        players,
-                        rd_after.get('stake', DEFAULT_STAKE),
-                        now,
+                from settlement import refund_no_winner
+                logger.info(
+                    f"[GameLoop] No real winner for {round_id} after "
+                    f"{len(called_now)} calls — ending with no winner"
+                )
+                result = await _db(lambda: refund_no_winner(
+                    db,
+                    round_id,
+                    players,
+                    rd_after.get('stake', DEFAULT_STAKE),
+                ))
+                if result.get('ok'):
+                    logger.info(
+                        f"[GameLoop] {round_id}: no_winner_max_30 — "
+                        f"refunded {result.get('amount', 0)} ETB to players"
                     )
-                    logger.info(f"[GameLoop] {round_id}: no_winner_max_30 — refunded {refunded} ETB to players")
-                    db.collection('rounds').document(round_id).update({
-                        'status': 'completed',
-                        'winners': [],
-                        'winner_name': 'No winner',
-                        'prize_per_winner': 0,
-                        'admin_profit': 0,
-                        'refunded': True,
-                        'payout_processed': True,
-                        'completed_at': now,
-                    })
-                await _db(_end_no_winner)
+                else:
+                    logger.error(f"[GameLoop] No-winner refund failed for {round_id}: {result}")
                 await broadcast_event('rounds', round_id)
                 return
 
@@ -877,7 +906,8 @@ async def start_background_monitor():
 # Cartela Management
 # ═══════════════════════════════════════════════════════════════
 @app.post("/api/cartelas/generate")
-async def generate_cartelas():
+async def generate_cartelas(request: Request):
+    _require_admin_or_internal(request)
     global _cartela_gen_progress
     import threading
     logger.info(f"[CART-DBG] ENDPOINT ENTERED thread={threading.current_thread().name}")
@@ -930,8 +960,9 @@ async def cartela_status():
 
 
 @app.post("/api/cartelas/reset")
-async def reset_cartela_status():
+async def reset_cartela_status(request: Request):
     """Reset cartela generation status (admin use)."""
+    _require_admin_or_internal(request)
     global _cartela_gen_progress
     _cartela_gen_progress = {"status": "idle", "generated": 0, "total": 500, "error": None}
     return {"status": "reset"}
@@ -1062,12 +1093,8 @@ async def unselect_cartela(round_id: str, req: SelectRequest, request: Request):
 
 @app.post("/api/rounds/{round_id}/close-empty")
 async def close_empty_round(round_id: str, request: Request):
-    """Close a stale round that has zero players (sanctioned server-side replacement for
-    the old client-side PATCH that completed empty rounds). Any authed player/admin may
-    call it, but it only acts when the round truly has no players."""
-    identity = _auth_any(request)
-    if not identity:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    """Close a stale empty round from an admin or the internal engine only."""
+    _require_admin_or_internal(request)
 
     def _do_close():
         snap = db.collection('rounds').document(round_id).get()
@@ -1104,8 +1131,9 @@ async def start_round(round_id: str):
 
 
 @app.post("/api/rounds/{round_id}/call")
-async def call_number(round_id: str):
-    """Call the next random number."""
+async def call_number(round_id: str, request: Request):
+    """Call the next random number from an admin or internal engine only."""
+    _require_admin_or_internal(request)
     number = await engine.call_number(round_id)
     if number is None:
         raise HTTPException(status_code=400, detail="No more numbers to call or round not playing")
@@ -1113,15 +1141,17 @@ async def call_number(round_id: str):
 
 
 @app.post("/api/rounds/{round_id}/check-bingo")
-async def check_bingo(round_id: str, req: BingoCheckRequest):
-    """Check if a player has bingo."""
-    result = await engine.check_bingo(round_id, req.user_id)
+async def check_bingo(round_id: str, req: BingoCheckRequest, request: Request):
+    """Check bingo only for the verified player or an admin/internal caller."""
+    user_id = _actor_user_id(request, req.user_id)
+    result = await engine.check_bingo(round_id, user_id)
     return result
 
 
 @app.post("/api/rounds/{round_id}/end")
-async def end_round(round_id: str, req: EndRoundRequest):
-    """End the round and distribute prizes."""
+async def end_round(round_id: str, req: EndRoundRequest, request: Request):
+    """End the round and distribute prizes from an admin or internal engine only."""
+    _require_admin_or_internal(request)
     # Cancel game loop if running
     task = _active_game_tasks.pop(round_id, None)
     if task:
@@ -1152,8 +1182,9 @@ async def get_rounds(limit: int = 20):
 # Dashboard / Stats
 # ═══════════════════════════════════════════════════════════════
 @app.get("/api/dashboard")
-async def get_dashboard():
-    """Get dashboard overview."""
+async def get_dashboard(request: Request):
+    """Get dashboard overview for admins/internal callers."""
+    _require_admin_or_internal(request)
     users = await user_manager.get_all_users()
     total_play = sum(u.get('play_wallet', 0) for u in users)
     total_balance = total_play
@@ -1188,22 +1219,25 @@ async def get_dashboard():
 
 
 @app.get("/api/users")
-async def get_users(limit: int = 100):
-    """Get all users."""
+async def get_users(limit: int = 100, request: Request = None):
+    """Get all users for admins/internal callers."""
+    _require_admin_or_internal(request)
     users = await user_manager.get_all_users(limit)
     return {"users": users}
 
 
 @app.get("/api/users/{user_id}")
-async def get_user(user_id: int):
-    """Get specific user."""
+async def get_user(user_id: int, request: Request):
+    """Get a specific user for admins/internal callers."""
+    _require_admin_or_internal(request)
     user = await user_manager.get_user(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return {"user": user}
 
 @app.post("/api/notify")
-async def notify_user(req: NotifyRequest):
+async def notify_user(req: NotifyRequest, request: Request):
+    _require_admin_or_internal(request)
     try:
         bot = Bot(token=BOT_TOKEN)
         await bot.send_message(chat_id=req.user_id, text=req.text)
@@ -1295,6 +1329,185 @@ class SystemStatusRequest(BaseModel):
 
 class SettingsRequest(BaseModel):
     data: dict
+
+
+class InternalDepositCreateRequest(BaseModel):
+    user_id: str
+    username: str = ""
+    first_name: str = ""
+    telebirr_name: str = ""
+    amount: float
+    transaction_id: str
+    sender_name: str = "Unknown"
+
+
+class InternalWithdrawalCreateRequest(BaseModel):
+    user_id: str
+    username: str = ""
+    first_name: str = ""
+    amount: float
+    phone: str
+    telebirr_name: str = ""
+    idempotency_key: Optional[str] = None
+
+
+class InternalTransferRequest(BaseModel):
+    sender_id: str
+    recipient_id: str
+    amount: float
+    idempotency_key: Optional[str] = None
+
+
+class InternalBonusConversionRequest(BaseModel):
+    user_id: str
+    rate: float = 10
+    idempotency_key: Optional[str] = None
+
+
+class InternalRegisterRequest(BaseModel):
+    user_id: str
+    name: str
+    phone: str
+    telebirr_name: str = ""
+    idempotency_key: Optional[str] = None
+
+
+@app.post("/api/internal/accounts/transfer")
+async def internal_transfer_funds(req: InternalTransferRequest, request: Request):
+    """Transfer play-wallet value atomically between two users."""
+    _require_internal(request)
+    if not req.idempotency_key:
+        raise HTTPException(status_code=400, detail="idempotency_key_required")
+    from settlement import transfer_funds
+    result = await _db(lambda: transfer_funds(
+        db,
+        req.sender_id,
+        req.recipient_id,
+        req.amount,
+        req.idempotency_key,
+    ))
+    if result.get("ok"):
+        await broadcast_event("users", str(req.sender_id))
+        await broadcast_event("users", str(req.recipient_id))
+    return result
+
+
+@app.post("/api/internal/accounts/convert-bonus")
+async def internal_convert_bonus(req: InternalBonusConversionRequest, request: Request):
+    """Convert bonus coins into play-wallet value atomically."""
+    _require_internal(request)
+    from settlement import convert_bonus
+    result = await _db(lambda: convert_bonus(
+        db,
+        req.user_id,
+        req.rate,
+        req.idempotency_key,
+    ))
+    if result.get("ok"):
+        await broadcast_event("users", str(req.user_id))
+    return result
+
+
+@app.post("/api/internal/accounts/register")
+async def internal_register_user(req: InternalRegisterRequest, request: Request):
+    """Register a user and award the welcome bonus at most once."""
+    _require_internal(request)
+    if not req.name.strip() or not req.phone.strip():
+        raise HTTPException(status_code=400, detail="name_and_phone_required")
+    from settlement import register_user
+    result = await _db(lambda: register_user(
+        db,
+        req.user_id,
+        req.name.strip(),
+        req.phone.strip(),
+        req.telebirr_name.strip(),
+        req.idempotency_key,
+    ))
+    if result.get("ok"):
+        await broadcast_event("users", str(req.user_id))
+    return result
+
+
+@app.post("/api/internal/withdrawals/create")
+async def internal_create_withdrawal(req: InternalWithdrawalCreateRequest, request: Request):
+    """Debit and create one pending withdrawal on the gateway database."""
+    _require_internal(request)
+    from settlement import create_withdrawal
+    data = {
+        "userId": str(req.user_id),
+        "username": req.username,
+        "firstName": req.first_name,
+        "amount": req.amount,
+        "phone": req.phone.strip(),
+        "telebirr_name": req.telebirr_name.strip(),
+        "status": "pending",
+        "createdAt": datetime.now(tz=timezone.utc),
+        "processedAt": None,
+        "adminNote": "",
+    }
+    if not data["phone"]:
+        raise HTTPException(status_code=400, detail="no_phone")
+    result = await _db(lambda: create_withdrawal(db, data, req.idempotency_key))
+    if not result.get("ok"):
+        return result
+    await broadcast_event("users", str(req.user_id))
+    await broadcast_event("withdrawals", result["withdrawal_id"])
+    return result
+
+
+@app.post("/api/internal/deposits/create")
+async def internal_create_deposit(req: InternalDepositCreateRequest, request: Request):
+    """Create a pending deposit exactly once on the gateway database."""
+    _require_internal(request)
+    from settlement import create_deposit
+    data = {
+        "userId": str(req.user_id),
+        "username": req.username,
+        "firstName": req.first_name,
+        "telebirrName": req.telebirr_name,
+        "amount": req.amount,
+        "transactionId": req.transaction_id.strip(),
+        "senderName": req.sender_name,
+        "status": "pending",
+        "createdAt": datetime.now(tz=timezone.utc),
+        "processedAt": None,
+        "adminNote": "",
+    }
+    result = await _db(lambda: create_deposit(db, data))
+    if not result.get("ok") and result.get("error") == "duplicate_txn":
+        raise HTTPException(status_code=400, detail="duplicate_transaction")
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Deposit creation failed"))
+    await broadcast_event("deposits", result["deposit_id"])
+    return result
+
+
+@app.post("/api/internal/settlements/deposits/{deposit_id}/{status}")
+async def internal_settle_deposit(deposit_id: str, status: str, request: Request, note: str = ""):
+    """Atomically settle a deposit for the bot service."""
+    _require_internal(request)
+    if status not in {"approved", "rejected"}:
+        raise HTTPException(status_code=400, detail="Invalid deposit status")
+    from settlement import settle_deposit
+    result = await _db(lambda: settle_deposit(db, deposit_id, status, note))
+    if result.get("user_id") is not None:
+        await broadcast_event("users", str(result["user_id"]))
+    await broadcast_event("deposits", deposit_id)
+    return result
+
+
+@app.post("/api/internal/settlements/withdrawals/{withdrawal_id}/{status}")
+async def internal_settle_withdrawal(withdrawal_id: str, status: str, request: Request, note: str = ""):
+    """Atomically settle a withdrawal for the bot service."""
+    _require_internal(request)
+    if status not in {"approved", "rejected"}:
+        raise HTTPException(status_code=400, detail="Invalid withdrawal status")
+    from settlement import settle_withdrawal
+    result = await _db(lambda: settle_withdrawal(db, withdrawal_id, status, note))
+    if result.get("user_id") is not None:
+        await broadcast_event("users", str(result["user_id"]))
+    await broadcast_event("withdrawals", withdrawal_id)
+    return result
 
 
 @app.get("/api/validate-withdrawal/{user_id}")
@@ -1389,10 +1602,6 @@ async def submit_deposit(req: DepositSubmitRequest, request: Request):
     if len(transaction_id) < 3:
         raise HTTPException(status_code=400, detail=get_bot_text('deposit_invalid_number', db))
 
-    dup = db.collection('deposits').where('transactionId', '==', transaction_id).limit(1).get()
-    if list(dup):
-        raise HTTPException(status_code=400, detail=get_bot_text('deposit_duplicate_txn', db))
-
     deposit_data = {
         'userId': str(user_id),
         'username': user.get('username', ''),
@@ -1406,14 +1615,19 @@ async def submit_deposit(req: DepositSubmitRequest, request: Request):
         'processedAt': None,
         'adminNote': '',
     }
-    deposit_ref = db.collection('deposits').document()
-    deposit_ref.set(deposit_data)
+    from settlement import create_deposit
+    result = await _db(lambda: create_deposit(db, deposit_data))
+    if not result.get("ok"):
+        if result.get("error") == "duplicate_txn":
+            raise HTTPException(status_code=400, detail=get_bot_text('deposit_duplicate_txn', db))
+        raise HTTPException(status_code=400, detail=result.get("error", "Deposit creation failed"))
+    deposit_id = result["deposit_id"]
 
-    await _notify_admin_deposit_web(deposit_data, deposit_ref.id)
+    await _notify_admin_deposit_web(deposit_data, deposit_id)
 
     return {
         "ok": True,
-        "deposit_id": deposit_ref.id,
+        "deposit_id": deposit_id,
         "status": "pending",
         "phone": get_bot_text('deposit_phone', db),
         "message": get_bot_text(
@@ -1422,7 +1636,7 @@ async def submit_deposit(req: DepositSubmitRequest, request: Request):
             amount=amount,
             telebirr_name=telebirr_name,
             transaction_id=transaction_id,
-            deposit_id=deposit_ref.id,
+            deposit_id=deposit_id,
         ),
     }
 
@@ -1435,16 +1649,14 @@ class WithdrawalCreateRequest(BaseModel):
 
 @app.post("/api/withdrawals/create")
 async def create_withdrawal(req: WithdrawalCreateRequest, request: Request):
-    """Create a pending withdrawal server-side (replaces the old client-side batch that
-    decremented play_wallet directly). Validates with the same rules as the bot flow."""
+    """Create a pending withdrawal through the authoritative idempotent creator."""
     user_id = _require_player(request)
     user = await user_manager.get_user(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    amount = req.amount
     try:
-        amount = float(amount)
+        amount = float(req.amount)
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="invalid_amount")
     if not math.isfinite(amount) or amount <= 0:
@@ -1461,16 +1673,6 @@ async def create_withdrawal(req: WithdrawalCreateRequest, request: Request):
     if not telebirr_name:
         raise HTTPException(status_code=400, detail="no_name")
 
-    now = datetime.now(tz=timezone.utc)
-    user_ref = db.collection('users').document(str(user_id))
-    current_pw = float(user.get('play_wallet', 0) or 0)
-    if current_pw < amount:
-        raise HTTPException(status_code=400, detail="insufficient")
-    user_ref.update({
-        'play_wallet': current_pw - amount,
-        'updated_at': now,
-    })
-
     withdrawal_data = {
         'userId': str(user_id),
         'username': user.get('username', ''),
@@ -1479,19 +1681,26 @@ async def create_withdrawal(req: WithdrawalCreateRequest, request: Request):
         'amount': amount,
         'phone': phone,
         'status': 'pending',
-        'createdAt': now,
+        'createdAt': datetime.now(tz=timezone.utc),
         'processedAt': None,
         'adminNote': '',
     }
-    withdrawal_ref = db.collection('withdrawals').document()
-    withdrawal_ref.set(withdrawal_data)
-    await broadcast_event('users', str(user_id))
+    from settlement import create_withdrawal
+    result = await _db(lambda: create_withdrawal(
+        db,
+        withdrawal_data,
+        request.headers.get('X-Idempotency-Key'),
+    ))
+    if not result.get('ok'):
+        return result
 
-    # Notify admin via Telegram (same payload as the old /api/admin/withdrawals/notify)
+    user_id_str = str(user_id)
+    await broadcast_event('users', user_id_str)
+    await broadcast_event('withdrawals', result['withdrawal_id'])
+
     try:
         from config import ADMIN_BOT_TOKEN, ADMIN_CHAT_ID
         if ADMIN_BOT_TOKEN and ADMIN_CHAT_ID:
-            import httpx
             text = (
                 f"🎰 *New Withdrawal Request*\n\n"
                 f"👤 User: {withdrawal_data['firstName']} (@{withdrawal_data['username']})\n"
@@ -1499,14 +1708,14 @@ async def create_withdrawal(req: WithdrawalCreateRequest, request: Request):
                 f"💰 Amount: *{amount} ETB*\n"
                 f"📱 Phone: {phone}\n"
                 f"📛 TeleBirr: {telebirr_name}\n"
-                f"🔗 ID: `{withdrawal_ref.id}`"
+                f"🔗 ID: `{result['withdrawal_id']}`"
             )
             bot = Bot(token=ADMIN_BOT_TOKEN)
             await bot.send_message(chat_id=int(ADMIN_CHAT_ID), text=text, parse_mode='Markdown')
     except Exception:
         pass
 
-    return {"ok": True, "withdrawal_id": withdrawal_ref.id, "status": "pending"}
+    return result
 
 
 @app.get("/api/admin/deposits")
@@ -1521,35 +1730,14 @@ async def admin_get_deposits(status: Optional[str] = None, limit: int = 50):
 
 @app.post("/api/admin/deposits/{deposit_id}/approve")
 async def admin_approve_deposit(deposit_id: str, req: DepositActionRequest):
-    dep_snap = db.collection('deposits').document(deposit_id).get()
-    if not dep_snap.exists:
-        raise HTTPException(status_code=404, detail="Deposit not found")
-    d = dep_snap.to_dict()
-    if d.get('status') != 'pending':
-        raise HTTPException(status_code=400, detail=f"Deposit already {d.get('status')}")
-    amount = d.get('amount', 0)
-    user_id = str(d.get('userId', ''))
-    if not math.isfinite(float(amount)) or float(amount) <= 0:
-        raise HTTPException(status_code=400, detail="Invalid deposit amount")
-
-    # Credit user balance
-    user_snap = db.collection('users').document(user_id).get()
-    if not user_snap.exists:
-        raise HTTPException(status_code=404, detail="User not found")
-    user_data = user_snap.to_dict()
-    db.collection('users').document(user_id).update({
-        'play_wallet': (user_data.get('play_wallet', 0) or 0) + amount,
-        'updated_at': datetime.now(tz=timezone.utc).isoformat()
-    })
-    db.collection('deposits').document(deposit_id).update({
-        'status': 'approved',
-        'processedAt': datetime.now(tz=timezone.utc).isoformat(),
-        'adminNote': req.note or 'Approved by admin'
-    })
-    await broadcast_event('users', user_id)
-    await broadcast_event('deposits', deposit_id)
-
-    # Notify user via bot
+    from settlement import settle_deposit
+    result = await _db(lambda: settle_deposit(db, deposit_id, "approved", req.note or "Approved by admin"))
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Deposit settlement failed"))
+    amount = result.get("amount", 0)
+    user_id = str(result.get("user_id", ""))
+    await broadcast_event("users", user_id)
+    await broadcast_event("deposits", deposit_id)
     try:
         bot = Bot(token=BOT_TOKEN)
         await bot.send_message(
@@ -1558,36 +1746,28 @@ async def admin_approve_deposit(deposit_id: str, req: DepositActionRequest):
         )
     except Exception:
         pass
-
-    return {"ok": True, "amount": amount, "user_id": user_id}
+    return result
 
 
 @app.post("/api/admin/deposits/{deposit_id}/reject")
 async def admin_reject_deposit(deposit_id: str, req: DepositActionRequest):
-    dep_snap = db.collection('deposits').document(deposit_id).get()
-    if not dep_snap.exists:
-        raise HTTPException(status_code=404, detail="Deposit not found")
-    d = dep_snap.to_dict()
-    if d.get('status') != 'pending':
-        raise HTTPException(status_code=400, detail=f"Deposit already {d.get('status')}")
-    user_id = str(d.get('userId', ''))
-    note = req.note or 'Rejected by admin'
-
-    db.collection('deposits').document(deposit_id).update({
-        'status': 'rejected',
-        'processedAt': datetime.now(tz=timezone.utc).isoformat(),
-        'adminNote': note
-    })
-    await broadcast_event('deposits', deposit_id)
-    try:
-        bot = Bot(token=BOT_TOKEN)
-        await bot.send_message(
-            chat_id=int(user_id),
-            text=f"❌ Deposit rejected.\nReason: {note}\nPlease contact support if you need help."
-        )
-    except Exception:
-        pass
-    return {"ok": True}
+    from settlement import settle_deposit
+    note = req.note or "Rejected by admin"
+    result = await _db(lambda: settle_deposit(db, deposit_id, "rejected", note))
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Deposit settlement failed"))
+    user_id = str(result.get("user_id", ""))
+    await broadcast_event("deposits", deposit_id)
+    if user_id:
+        try:
+            bot = Bot(token=BOT_TOKEN)
+            await bot.send_message(
+                chat_id=int(user_id),
+                text=f"❌ Deposit rejected.\nReason: {note}\nPlease contact support if you need help."
+            )
+        except Exception:
+            pass
+    return result
 
 
 class WithdrawalNotifyRequest(BaseModel):
@@ -1653,72 +1833,47 @@ async def admin_get_withdrawals(status: Optional[str] = None, limit: int = 50):
 
 @app.post("/api/admin/withdrawals/{withdrawal_id}/approve")
 async def admin_approve_withdrawal(withdrawal_id: str, req: DepositActionRequest):
-    snap = db.collection('withdrawals').document(withdrawal_id).get()
-    if not snap.exists:
-        raise HTTPException(status_code=404, detail="Withdrawal not found")
-    d = snap.to_dict()
-    if d.get('status') != 'pending':
-        raise HTTPException(status_code=400, detail=f"Already {d.get('status')}")
-    amount = d.get('amount', 0)
-    user_id = str(d.get('userId', ''))
-    if not math.isfinite(float(amount)) or float(amount) <= 0:
-        raise HTTPException(status_code=400, detail="Invalid withdrawal amount")
-
-    db.collection('withdrawals').document(withdrawal_id).update({
-        'status': 'approved',
-        'processedAt': datetime.now(tz=timezone.utc).isoformat(),
-        'adminNote': req.note or 'Approved by admin'
-    })
-    await broadcast_event('withdrawals', withdrawal_id)
+    from settlement import settle_withdrawal
+    result = await _db(lambda: settle_withdrawal(db, withdrawal_id, "approved", req.note or "Approved by admin"))
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Withdrawal settlement failed"))
+    amount = result.get("amount", 0)
+    user_id = str(result.get("user_id", ""))
+    await broadcast_event("withdrawals", withdrawal_id)
     try:
         from handlers.bot_content import get_bot_text
         bot = Bot(token=BOT_TOKEN)
         await bot.send_message(
             chat_id=int(user_id),
-            text=get_bot_text('withdraw_approved', db, amount=amount)
+            text=get_bot_text("withdraw_approved", db, amount=amount)
         )
     except Exception:
         pass
-    return {"ok": True, "amount": amount, "user_id": user_id}
+    return result
 
 
 @app.post("/api/admin/withdrawals/{withdrawal_id}/reject")
 async def admin_reject_withdrawal(withdrawal_id: str, req: DepositActionRequest):
-    snap = db.collection('withdrawals').document(withdrawal_id).get()
-    if not snap.exists:
-        raise HTTPException(status_code=404, detail="Withdrawal not found")
-    d = snap.to_dict()
-    if d.get('status') != 'pending':
-        raise HTTPException(status_code=400, detail=f"Already {d.get('status')}")
-    amount = d.get('amount', 0)
-    user_id = str(d.get('userId', ''))
-    note = req.note or 'Rejected by admin'
-
-    db.collection('withdrawals').document(withdrawal_id).update({
-        'status': 'rejected',
-        'processedAt': datetime.now(tz=timezone.utc).isoformat(),
-        'adminNote': note
-    })
-    await broadcast_event('withdrawals', withdrawal_id)
-    if amount > 0:
-        user_snap = db.collection('users').document(user_id).get()
-        if user_snap.exists:
-            u = user_snap.to_dict()
-            db.collection('users').document(user_id).update({
-                'play_wallet': (u.get('play_wallet', 0) or 0) + amount,
-                'updated_at': datetime.now(tz=timezone.utc).isoformat()
-            })
-            await broadcast_event('users', user_id)
-    try:
-        from handlers.bot_content import get_bot_text
-        bot = Bot(token=BOT_TOKEN)
-        await bot.send_message(
-            chat_id=int(user_id),
-            text=get_bot_text('withdraw_rejected', db, amount=amount)
-        )
-    except Exception:
-        pass
-    return {"ok": True}
+    from settlement import settle_withdrawal
+    note = req.note or "Rejected by admin"
+    result = await _db(lambda: settle_withdrawal(db, withdrawal_id, "rejected", note))
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Withdrawal settlement failed"))
+    amount = result.get("amount", 0)
+    user_id = str(result.get("user_id", ""))
+    await broadcast_event("withdrawals", withdrawal_id)
+    if user_id:
+        await broadcast_event("users", user_id)
+        try:
+            from handlers.bot_content import get_bot_text
+            bot = Bot(token=BOT_TOKEN)
+            await bot.send_message(
+                chat_id=int(user_id),
+                text=get_bot_text("withdraw_rejected", db, amount=amount)
+            )
+        except Exception:
+            pass
+    return result
 
 
 @app.patch("/api/admin/users/{user_id}/balance")
@@ -1964,6 +2119,46 @@ def _authorize_db_write(request: Request, collection: str, doc_id: Optional[str]
     return identity
 
 
+def _authorize_db_read(
+    request: Request,
+    collection: str,
+    doc_id: Optional[str] = None,
+    filters: Optional[str] = None,
+) -> dict:
+    """Authorize document-store reads without exposing private collections.
+
+    Public gameplay collections contain round/card state. Players may read only
+    their own user document and transaction queries constrained to their own
+    userId. Admin/internal identities may read the full store.
+    """
+    identity = _auth_any(request)
+    if collection in PUBLIC_DB_READ_COLLECTIONS:
+        return identity or {"kind": "public"}
+    if not identity:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if identity.get("kind") == "admin":
+        return identity
+    user_id = str(identity.get("user_id"))
+    if collection == "users" and doc_id == user_id:
+        return identity
+    if collection in PLAYER_DB_QUERY_COLLECTIONS:
+        try:
+            parsed = json.loads(filters or "[]")
+        except (TypeError, ValueError):
+            parsed = []
+        own_filter = any(
+            isinstance(item, list)
+            and len(item) == 3
+            and item[0] == "userId"
+            and item[1] in ("==", "equal", "equals")
+            and str(item[2]) == user_id
+            for item in parsed
+        )
+        if own_filter:
+            return identity
+    raise HTTPException(status_code=403, detail="Forbidden")
+
+
 def _sanitize_player_user_data(data: dict) -> dict:
     """Strip server-owned money/stats fields from player-authored user writes."""
     if not isinstance(data, dict):
@@ -1978,7 +2173,8 @@ def _auth_player_db_set(request: Request, collection: str, doc_id: str) -> bool:
 
 
 @app.get("/api/db/{collection}/{doc_id}")
-async def db_get_doc(collection: str, doc_id: str):
+async def db_get_doc(collection: str, doc_id: str, request: Request):
+    _authorize_db_read(request, collection, doc_id)
     snap = db.collection(collection).document(doc_id).get()
     if not snap.exists:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -2023,8 +2219,10 @@ async def db_query_collection(
     filters: Optional[str] = None,  # JSON string: [[field,op,val],...]
     order_by: Optional[str] = None,
     order_dir: str = "ASCENDING",
-    limit_n: Optional[int] = None
+    limit_n: Optional[int] = None,
+    request: Request = None,
 ):
+    _authorize_db_read(request, collection, filters=filters)
     ref = db.collection(collection)
     if filters:
         try:
@@ -2061,13 +2259,43 @@ async def disconnect(sid):
     """Client disconnected."""
     pass
 
+def _socket_identity(data: Optional[dict]) -> Optional[dict]:
+    """Validate the short-lived browser token attached to a subscription."""
+    data = data or {}
+    player_token = str(data.get("player_token") or "").strip()
+    if player_token:
+        info = _verify_token(player_token)
+        if info and info.get("role") == "player":
+            try:
+                return {"kind": "player", "user_id": int(info.get("username"))}
+            except (TypeError, ValueError):
+                return None
+    admin_token = str(data.get("admin_token") or "").strip()
+    if admin_token:
+        info = _verify_token(admin_token)
+        if info and info.get("role") in {"internal", "admin", "super_admin"}:
+            return {"kind": "admin", **info}
+    return None
+
+
 @sio.event
 async def subscribe(sid, data):
-    """Client subscribes to a collection/doc for real-time updates."""
+    """Join only public rooms or rooms authorized for the supplied browser token."""
+    data = data or {}
     collection = data.get('collection')
     doc_id = data.get('doc_id')
+    if not collection or not isinstance(collection, str):
+        return {"ok": False, "error": "Invalid collection"}
+    if collection not in PUBLIC_DB_READ_COLLECTIONS:
+        identity = _socket_identity(data)
+        if not identity:
+            return {"ok": False, "error": "Unauthorized"}
+        if identity.get("kind") == "player":
+            if collection != "users" or str(doc_id) != str(identity.get("user_id")):
+                return {"ok": False, "error": "Forbidden"}
     room = f"{collection}:{doc_id}" if doc_id else collection
     await sio.enter_room(sid, room)
+    return {"ok": True}
 
 @sio.event
 async def unsubscribe(sid, data):

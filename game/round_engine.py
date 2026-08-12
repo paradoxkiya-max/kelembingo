@@ -10,7 +10,13 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Tuple
-from firestore_db import FieldFilter, transactional as firestore_transactional, Increment, ArrayUnion
+from firestore_db import (
+    FieldFilter,
+    transactional as firestore_transactional,
+    run_idempotent,
+    Increment,
+    ArrayUnion,
+)
 from firestore_db import MockFirestoreClient
 
 logger = logging.getLogger(__name__)
@@ -64,6 +70,7 @@ class RoundEngine:
         self.master_ref = db.collection('cartelas_master')
         self.rounds_ref = db.collection('rounds')
         self._round_locks = {}
+        self._user_locks = {}
 
     # ═══════════════════════════════════════════════════════════════
     # Cartela Generation (one-time, admin-triggered)
@@ -192,150 +199,39 @@ class RoundEngine:
     def join_round_sync(self, round_id: str, user_id: int, 
                         cartela_numbers: List[int], user_name: str) -> dict:
         """Synchronous implementation of player joining a round."""
-        if len(cartela_numbers) > MAX_CARTELAS_PER_PLAYER:
-            return {'error': f'Maximum {MAX_CARTELAS_PER_PLAYER} cartelas allowed'}
-        if len(cartela_numbers) == 0:
-            return {'error': 'Must select at least 1 cartela'}
-
-        # Validate cartela numbers
-        for num in cartela_numbers:
-            if num < 1 or num > TOTAL_CARTELAS:
-                return {'error': f'Invalid cartela number: {num}'}
-
-        # Check for duplicates in selection
-        if len(cartela_numbers) != len(set(cartela_numbers)):
-            return {'error': 'Duplicate cartela numbers in selection'}
-
-        round_doc = self.rounds_ref.document(round_id).get()
-        if not round_doc.exists:
-            return {'error': 'Round not found'}
-
-        round_data = round_doc.to_dict()
-        status = round_data.get('status')
-        called = round_data.get('called_numbers', [])
-        if status != 'selecting' and not (status == 'playing' and len(called) == 0):
-            return {'error': 'Round is no longer accepting players'}
-
-        # Check if cartelas are already taken
-        taken = set(round_data.get('taken_cartelas', []))
-        for num in cartela_numbers:
-            if num in taken:
-                return {'error': f'Cartela #{num} is already taken'}
-
-        # Check if user already joined
-        uid_str = str(user_id)
-        if uid_str in round_data.get('players', {}):
-            return {'error': 'You already joined this round'}
-
-        # Deduct play wallet
-        round_stake = round_data.get('stake', DEFAULT_STAKE)
-        total_cost = round_stake * len(cartela_numbers)
-        user_ref = self.db.collection('users').document(uid_str)
-        user_doc = user_ref.get()
-        if not user_doc.exists:
-            user_data = {
-                'user_id': user_id,
-                'first_name': user_name or 'Player',
-                'username': '',
-                'balance': 0,
-                'play_wallet': 0.0,
-                'bonus': 0,
-                'phone': '',
-                'registered': False,
-                'total_games': 0,
-                'wins': 0,
-                'losses': 0,
-                'is_playing': False,
-                'created_at': datetime.now(tz=timezone.utc),
-                'updated_at': datetime.now(tz=timezone.utc),
-            }
-            user_ref.set(user_data)
-        else:
-            user_data = user_doc.to_dict()
-
-        pw = float(user_data.get('play_wallet', 0))
-        if pw < total_cost:
-            return {'error': f'Not enough balance. Need {total_cost} ETB, have {pw} ETB'}
-
-        # Deduct and update
-        user_ref.update({
-            'play_wallet': pw - total_cost,
-            'is_playing': True,
-            'updated_at': datetime.now(tz=timezone.utc),
-        })
-
-        # Everything after deduction is wrapped in try/except to guarantee
-        # automatic refund if any unhandled error occurs (DB failure, etc.)
-        try:
-            # Second validation check right before update (reduce race condition window)
-            round_doc_final = self.rounds_ref.document(round_id).get()
-            if round_doc_final.exists:
-                round_data_final = round_doc_final.to_dict()
-                status_final = round_data_final.get('status')
-                called_final = round_data_final.get('called_numbers', [])
-                if status_final != 'selecting' and not (status_final == 'playing' and len(called_final) == 0):
-                    # Rollback: refund the user
-                    user_ref.update({
-                        'play_wallet': pw,
-                        'is_playing': False,
-                        'updated_at': datetime.now(tz=timezone.utc),
-                    })
-                    return {'error': 'Round is no longer accepting players'}
-
-                taken_final = set(round_data_final.get('taken_cartelas', []))
-                for num in cartela_numbers:
-                    if num in taken_final:
-                        # Rollback: refund the user
-                        user_ref.update({
-                            'play_wallet': pw,
-                            'is_playing': False,
-                            'updated_at': datetime.now(tz=timezone.utc),
-                        })
-                        return {'error': f'Cartela #{num} was just taken by another player. Please select different cards.'}
-
-            new_pc = round_data.get('player_count', 0) + len(cartela_numbers)
-
-            self.rounds_ref.document(round_id).update({
-                f'players.{uid_str}': {
-                    'cartelas': cartela_numbers,
-                    'name': user_name,
-                    'joined_at': datetime.now(tz=timezone.utc).isoformat(),
-                },
-                'player_count': Increment(len(cartela_numbers)),
-                'taken_cartelas': ArrayUnion(cartela_numbers),
-            })
-
-            return {
-                'status': 'joined',
-                'cost': total_cost,
-                'cartelas': cartela_numbers,
-                'player_count': new_pc,
-            }
-        except Exception as e:
-            # CRITICAL SAFETY NET: refund the user on any unexpected failure
-            logger.error(f"join_round_sync ROLLBACK for user {user_id} in round {round_id}: {e}")
-            try:
-                user_ref.update({
-                    'play_wallet': pw,
-                    'is_playing': False,
-                    'updated_at': datetime.now(tz=timezone.utc),
-                })
-            except Exception as refund_err:
-                logger.critical(f"REFUND FAILED for user {user_id}, amount {total_cost}: {refund_err}")
-            raise
-
+        from settlement import join_round
+        operation_key = (
+            f"{round_id}:{user_id}:"
+            f"{','.join(str(number) for number in cartela_numbers)}"
+        )
+        return join_round(
+            self.db,
+            round_id,
+            user_id,
+            cartela_numbers,
+            user_name,
+            max_cartelas=MAX_CARTELAS_PER_PLAYER,
+            total_cartelas=TOTAL_CARTELAS,
+            idempotency_key=operation_key,
+        )
     async def join_round(self, round_id: str, user_id: int, 
                          cartela_numbers: List[int], user_name: str) -> dict:
         """Player joins a round with chosen cartelas (max 2).
         Serialized per round via asyncio.Lock to prevent DB lock contention and RAM spikes under high concurrency.
         """
+        if user_id not in self._user_locks:
+            self._user_locks[user_id] = asyncio.Lock()
         if round_id not in self._round_locks:
             self._round_locks[round_id] = asyncio.Lock()
 
-        async with self._round_locks[round_id]:
-            return await asyncio.to_thread(
-                self.join_round_sync, round_id, user_id, cartela_numbers, user_name
-            )
+        # Lock the user first so one wallet cannot be reserved by two rounds in
+        # this gateway process. The database-level is_playing guard remains the
+        # source of truth across restarts and separate services.
+        async with self._user_locks[user_id]:
+            async with self._round_locks[round_id]:
+                return await asyncio.to_thread(
+                    self.join_round_sync, round_id, user_id, cartela_numbers, user_name
+                )
 
     async def start_round(self, round_id: str) -> dict:
         """Transition round from 'selecting' to 'playing'."""
@@ -549,19 +445,13 @@ class RoundEngine:
         players = data.get('players', {})
         player_cartelas = self.build_player_cartelas(players)
 
-        if data.get('game_target') != game_target:
-            self.rounds_ref.document(round_id).update({'game_target': game_target})
-
         number = available[0]
 
-        # Ensure predetermined winner exists (pick at round start, persist in DB)
+        # Ensure a predetermined winner is selected; the durable commit below
+        # persists it together with the first successful number call.
         target_winner = data.get('target_winner')
         if not target_winner:
             target_winner = self._select_predetermined_winner(player_cartelas)
-            if target_winner:
-                self.rounds_ref.document(round_id).update({
-                    'target_winner': target_winner,
-                })
 
         winning_pattern = set(target_winner.get('pattern', [])) if target_winner else set()
 
@@ -630,15 +520,16 @@ class RoundEngine:
                         number = candidate
                         break
 
-        called.append(number)
-        now = datetime.now(tz=timezone.utc)
-        self.rounds_ref.document(round_id).update({
-            'called_numbers': called,
-            'last_called_number': number,
-            'last_called_at': now,
-            'next_number_at': _grid_next_number_at(data.get('game_started_at'), len(called)),
-        })
-        return number
+        from settlement import commit_round_number
+        result = commit_round_number(
+            self.db,
+            round_id,
+            len(called),
+            number,
+            game_target=game_target,
+            target_winner=target_winner,
+        )
+        return result.get('number')
 
     def get_cartela_patterns(self, flat_cartela: List[int]) -> List[List[int]]:
         """Return all winning patterns for a cartela, cached globally."""
@@ -706,90 +597,109 @@ class RoundEngine:
             return await asyncio.to_thread(self._end_sync, round_id, winner_ids)
 
     def _end_sync(self, round_id: str, winner_ids: List[int]) -> dict:
-        round_doc = self.rounds_ref.document(round_id).get()
-        if not round_doc.exists:
-            return {'error': 'Round not found'}
+        """Apply one payout atomically and return the same result on retry."""
+        operation_key = f"round-payout:{round_id}"
 
-        data = round_doc.to_dict()
-        if data.get('payout_processed'):
-            return {'error': 'Round already paid out'}
+        def _apply(transaction):
+            round_ref = self.rounds_ref.document(round_id)
+            round_doc = transaction.get(round_ref)
+            if not round_doc.exists:
+                return {'error': 'Round not found'}
 
-        if data['status'] not in ('playing', 'completed'):
-            return {'error': 'Round not in a valid state for ending'}
+            data = round_doc.to_dict()
+            if data.get('payout_processed'):
+                return {'error': 'Round already paid out'}
+            if data.get('status') not in ('playing', 'completed'):
+                return {'error': 'Round not in a valid state for ending'}
 
-        player_count = data.get('player_count', 0)
-        round_stake = data.get('stake', DEFAULT_STAKE)
-        total_pool = player_count * round_stake
-        derash = total_pool * 0.75
-        admin_profit = total_pool * 0.25
+            player_count = data.get('player_count', 0)
+            round_stake = data.get('stake', DEFAULT_STAKE)
+            total_pool = player_count * round_stake
+            derash = total_pool * 0.75
+            admin_profit = total_pool * 0.25
 
-        # Only players who actually joined this round may be declared winners.
-        players = data.get('players', {}) or {}
-        valid_winner_ids = []
-        for wid in winner_ids:
-            if str(wid) in players:
-                valid_winner_ids.append(wid)
-        invalid_ids = [w for w in winner_ids if w not in valid_winner_ids]
-        if invalid_ids:
-            logger.warning(f"end_round {round_id}: ignoring non-member winners {invalid_ids}")
-        winner_ids = valid_winner_ids
-
-        prize_per_winner = 0
-        if winner_ids:
-            prize_per_winner = derash / len(winner_ids)
+            # Only joined players may win, and duplicate IDs count once.
+            players = data.get('players', {}) or {}
+            valid_winner_ids = []
+            seen_winners = set()
             for wid in winner_ids:
+                wid_str = str(wid)
+                if wid_str in players and wid_str not in seen_winners:
+                    valid_winner_ids.append(int(wid))
+                    seen_winners.add(wid_str)
+            invalid_ids = [w for w in winner_ids if str(w) not in seen_winners]
+            if invalid_ids:
+                logger.warning(f"end_round {round_id}: ignoring non-member/duplicate winners {invalid_ids}")
+
+            prize_per_winner = derash / len(valid_winner_ids) if valid_winner_ids else 0
+            now = datetime.now(tz=timezone.utc)
+
+            def _finish_user(user_ref, user_data, update):
+                active_round = user_data.get('active_round_id')
+                if active_round in (None, round_id):
+                    update['is_playing'] = False
+                    update['active_round_id'] = None
+                update['updated_at'] = now
+                transaction.update(user_ref, update)
+
+            for wid in valid_winner_ids:
                 user_ref = self.db.collection('users').document(str(wid))
-                user_doc = user_ref.get()
+                user_doc = transaction.get(user_ref)
                 if user_doc.exists:
-                    ud = user_doc.to_dict()
-                    user_ref.update({
-                        'play_wallet': ud.get('play_wallet', 0) + prize_per_winner,
-                        'wins': ud.get('wins', 0) + 1,
-                        'is_playing': False,
-                        'updated_at': datetime.now(tz=timezone.utc),
+                    user_data = user_doc.to_dict()
+                    _finish_user(user_ref, user_data, {
+                        'play_wallet': user_data.get('play_wallet', 0) + prize_per_winner,
+                        'wins': user_data.get('wins', 0) + 1,
                     })
 
-        for uid_str in data.get('players', {}):
-            try:
-                uid_int = int(uid_str)
-            except ValueError:
-                continue
-            if uid_int not in winner_ids:
-                user_ref = self.db.collection('users').document(uid_str)
-                user_doc = user_ref.get()
-                if user_doc.exists:
-                    ud = user_doc.to_dict()
-                    user_ref.update({
-                        'losses': ud.get('losses', 0) + 1,
-                        'is_playing': False,
-                        'updated_at': datetime.now(tz=timezone.utc),
-                    })
+            for uid_str in data.get('players', {}):
+                try:
+                    uid_int = int(uid_str)
+                except (TypeError, ValueError):
+                    continue
+                if uid_int not in valid_winner_ids:
+                    user_ref = self.db.collection('users').document(uid_str)
+                    user_doc = transaction.get(user_ref)
+                    if user_doc.exists:
+                        user_data = user_doc.to_dict()
+                        _finish_user(user_ref, user_data, {
+                            'losses': user_data.get('losses', 0) + 1,
+                        })
 
-        winner_names = []
-        for wid in winner_ids:
-            user_ref = self.db.collection('users').document(str(wid))
-            user_doc = user_ref.get()
-            if user_doc.exists:
-                winner_names.append(user_doc.to_dict().get('first_name', 'Unknown'))
-            else:
-                winner_names.append('Unknown')
+            winner_names = []
+            for wid in valid_winner_ids:
+                user_ref = self.db.collection('users').document(str(wid))
+                user_doc = transaction.get(user_ref)
+                winner_names.append(user_doc.to_dict().get('first_name', 'Unknown') if user_doc.exists else 'Unknown')
 
-        self.rounds_ref.document(round_id).update({
-            'status': 'completed',
-            'winners': [str(w) for w in winner_ids],
-            'winner_name': winner_names[0] if len(winner_names) == 1 else ', '.join(winner_names),
-            'prize_per_winner': prize_per_winner,
-            'admin_profit': admin_profit,
-            'payout_processed': True,
-            'completed_at': datetime.now(tz=timezone.utc),
-        })
+            result = {
+                'status': 'completed',
+                'winners': valid_winner_ids,
+                'prize_per_winner': prize_per_winner,
+                'admin_profit': admin_profit,
+            }
+            transaction.update(round_ref, {
+                'status': 'completed',
+                'winners': [str(w) for w in valid_winner_ids],
+                'winner_name': winner_names[0] if len(winner_names) == 1 else ', '.join(winner_names),
+                'prize_per_winner': prize_per_winner,
+                'admin_profit': admin_profit,
+                'payout_processed': True,
+                'completed_at': now,
+            })
+            return result
 
-        return {
-            'status': 'completed',
-            'winners': winner_ids,
-            'prize_per_winner': prize_per_winner,
-            'admin_profit': admin_profit,
-        }
+        snapshot = self.rounds_ref.document(round_id).get()
+        snapshot_players = snapshot.to_dict().get('players', {}) if snapshot.exists else {}
+        lock_keys = [f"round:{round_id}"] + [
+            f"user:{uid}" for uid in snapshot_players.keys()
+        ]
+        return run_idempotent(
+            operation_key,
+            'round_payout',
+            _apply,
+            lock_keys=lock_keys,
+        )
 
     async def get_round(self, round_id: str) -> Optional[dict]:
         """Get round data by ID."""

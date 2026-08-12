@@ -6,6 +6,7 @@ from datetime import datetime, date, timezone
 import logging
 import sqlalchemy
 from sqlalchemy import create_engine, Column, String, Text, DateTime, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,22 @@ class SystemEvent(Base):
     collection = Column(String)
     doc_id = Column(String)
     event_type = Column(String)  # 'set', 'update', 'delete'
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class OperationRecord(Base):
+    """Durable idempotency record for money and game state transitions."""
+    __tablename__ = 'operation_records'
+    operation_key = Column(String, primary_key=True)
+    operation = Column(String, nullable=False)
+    result = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AccountLock(Base):
+    """Stable rows that can be locked while mutating one user's wallet."""
+    __tablename__ = 'account_locks'
+    user_id = Column(String, primary_key=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 # Create tables (defensively catch race conditions under concurrent multi-process startup)
@@ -124,16 +141,23 @@ class Transaction:
         ref._session = self._session
         return ref.get()
 
+    def query(self, ref):
+        ref._session = self._session
+        return ref
+
     def update(self, ref, data):
         ref._session = self._session
+        ref._in_batch = True
         ref.update(data)
 
     def set(self, ref, data, merge=False):
         ref._session = self._session
+        ref._in_batch = True
         ref.set(data, merge=merge)
 
     def delete(self, ref):
         ref._session = self._session
+        ref._in_batch = True
         ref.delete()
 
 def transactional(func):
@@ -149,6 +173,78 @@ def transactional(func):
         finally:
             sess.close()
     return wrapper
+
+def _json_default(value):
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return str(value)
+
+
+def _ensure_account_lock(session, key: str):
+    """Create a lock row without failing if another process created it first."""
+    key = str(key)
+    if engine.dialect.name == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert
+    elif engine.dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    else:
+        session.add(AccountLock(user_id=key))
+        session.flush()
+        return
+    statement = insert(AccountLock).values(user_id=key).on_conflict_do_nothing(
+        index_elements=[AccountLock.user_id]
+    )
+    session.execute(statement)
+
+
+def run_idempotent(operation_key: str, operation: str, callback, lock_key=None, lock_keys=None):
+    """Run a transaction once across processes and return the stored result on retry.
+
+    The callback receives a repository Transaction. Its document writes and the
+    unique operation record commit together. If another process wins the same
+    operation key, the losing transaction rolls back and returns the winner's
+    stored result without repeating the side effect.
+    """
+    sess = SessionLocal()
+    try:
+        requested_locks = list(lock_keys or [])
+        if lock_key is not None:
+            requested_locks.append(lock_key)
+        for key in sorted({str(value) for value in requested_locks}):
+            _ensure_account_lock(sess, key)
+            sess.query(AccountLock).filter(AccountLock.user_id == key).with_for_update().one()
+
+        existing = sess.query(OperationRecord).filter(
+            OperationRecord.operation_key == str(operation_key)
+        ).first()
+        if existing:
+            return json.loads(existing.result)
+
+        transaction = Transaction(sess)
+        result = callback(transaction)
+        record = OperationRecord(
+            operation_key=str(operation_key),
+            operation=str(operation),
+            result=json.dumps(result, default=_json_default),
+        )
+        sess.add(record)
+        sess.commit()
+        return result
+    except IntegrityError:
+        sess.rollback()
+        # A concurrent transaction may have inserted the same operation key.
+        winner = sess.query(OperationRecord).filter(
+            OperationRecord.operation_key == str(operation_key)
+        ).first()
+        if winner:
+            return json.loads(winner.result)
+        raise
+    except Exception:
+        sess.rollback()
+        raise
+    finally:
+        sess.close()
+
 
 class WriteBatch:
     def __init__(self, skip_events=False):
