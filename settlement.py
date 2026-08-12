@@ -238,7 +238,7 @@ def _next_number_at(started_at, call_count):
     if started_at is None or not hasattr(started_at, "__add__"):
         return None
     from datetime import timedelta
-    return started_at + timedelta(seconds=5 * int(call_count))
+    return started_at + timedelta(seconds=5 * (int(call_count) + 1))
 
 
 def join_round(
