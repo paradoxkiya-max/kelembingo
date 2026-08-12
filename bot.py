@@ -30,6 +30,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 user_manager = UserManager(db)
+_withdraw_locks = {}
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets')
 
 # ─── Conversation states ───
@@ -481,28 +482,51 @@ async def withdraw_telebirr_name(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def _process_withdraw(update, context, uid, amount, phone):
-    u = await user_manager.get_user(uid)
-    if not u:
-        await update.effective_message.reply_text(get_bot_text('play_need_start', db), reply_markup=MAIN_KEYBOARD)
-        return ConversationHandler.END
+    lock = _withdraw_locks.get(uid)
+    if lock is None:
+        lock = asyncio.Lock()
+        _withdraw_locks[uid] = lock
 
-    user_ref = db.collection('users').document(str(uid))
-    user_ref.update({'play_wallet': Increment(-amount), 'updated_at': datetime.now(tz=timezone.utc)})
+    async with lock:
+        u = await user_manager.get_user(uid)
+        if not u:
+            await update.effective_message.reply_text(get_bot_text('play_need_start', db), reply_markup=MAIN_KEYBOARD)
+            return ConversationHandler.END
 
-    withdrawal_data = {
-        'userId': str(uid),
-        'username': update.effective_user.username or '',
-        'firstName': update.effective_user.first_name or '',
-        'telebirrName': context.user_data.get('telebirr_name', '') if u else '',
-        'amount': amount,
-        'phone': phone,
-        'status': 'pending',
-        'createdAt': datetime.now(tz=timezone.utc),
-        'processedAt': None,
-        'adminNote': '',
-    }
-    ref = db.collection('withdrawals').document()
-    ref.set(withdrawal_data)
+        validation = await user_manager.validate_withdrawal(uid, amount)
+        if not validation.get('ok'):
+            error_key = f"withdraw_{validation.get('error')}"
+            kwargs = {k: v for k, v in validation.items() if k not in ('ok', 'error')}
+            await update.effective_message.reply_text(get_bot_text(error_key, db, **kwargs))
+            return ConversationHandler.END
+
+        user_ref = db.collection('users').document(str(uid))
+        debited = False
+        try:
+            user_ref.update({'play_wallet': Increment(-amount), 'updated_at': datetime.now(tz=timezone.utc)})
+            debited = True
+
+            withdrawal_data = {
+                'userId': str(uid),
+                'username': update.effective_user.username or '',
+                'firstName': update.effective_user.first_name or '',
+                'telebirrName': context.user_data.get('telebirr_name', ''),
+                'amount': amount,
+                'phone': phone,
+                'status': 'pending',
+                'createdAt': datetime.now(tz=timezone.utc),
+                'processedAt': None,
+                'adminNote': '',
+            }
+            ref = db.collection('withdrawals').document()
+            ref.set(withdrawal_data)
+        except Exception:
+            if debited:
+                try:
+                    user_ref.update({'play_wallet': Increment(amount), 'updated_at': datetime.now(tz=timezone.utc)})
+                except Exception as refund_error:
+                    logger.critical("Telegram withdrawal rollback failed for %s: %s", uid, refund_error)
+            raise
 
     await update.effective_message.reply_text(
         get_bot_text('withdraw_submitted', db, amount=amount, phone=phone, withdrawal_id=ref.id),

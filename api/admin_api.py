@@ -55,6 +55,7 @@ def _refund_no_winner_players(players: dict, stake: float, now) -> float:
                 'play_wallet': (ud.get('play_wallet', 0) or 0) + refund,
                 'losses': ud.get('losses', 0) + 1,
                 'is_playing': False,
+                'active_round_id': None,
                 'updated_at': now,
             })
             total += refund
@@ -170,7 +171,9 @@ AUTH_SECRET = os.getenv("ADMIN_AUTH_SECRET") or os.getenv("INTERNAL_API_KEY") or
 INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
 AUTH_TOKEN_TTL = int(os.getenv("ADMIN_AUTH_TTL_HOURS", "12")) * 3600
 PROTECTED_DB_COLLECTIONS = {"admins", "system", "settings", "bot_content"}
-PUBLIC_ADMIN_PATHS = {"/api/admin/login", "/api/admin/withdrawals/notify"}
+PUBLIC_ADMIN_PATHS = {"/api/admin/login"}
+PUBLIC_DB_READ_COLLECTIONS = {"rounds", "cartelas_master", "cartelas"}
+PLAYER_DB_QUERY_COLLECTIONS = {"deposits", "withdrawals"}
 
 
 def _b64e(b: bytes) -> str:
@@ -229,6 +232,7 @@ async def require_auth(request: Request):
 
 # ─── Player Auth (Telegram WebApp initData) ───
 PLAYER_AUTH_TTL = int(os.getenv("PLAYER_AUTH_TTL_HOURS", "24")) * 3600
+PLAYER_INITDATA_MAX_AGE = int(os.getenv("PLAYER_INITDATA_MAX_AGE_SECONDS", "86400"))
 # Fields a player may never write directly (server-owned money/stats)
 PLAYER_IMMUTABLE_USER_FIELDS = {"play_wallet", "balance", "bonus", "wins", "losses",
                                 "total_games", "is_playing", "user_id"}
@@ -252,8 +256,21 @@ def _verify_telegram_init_data(init_data: str) -> Optional[dict]:
     received_hash = params.pop("hash", None)
     if not received_hash:
         return None
+    auth_date_raw = params.get("auth_date")
+    try:
+        auth_date = int(auth_date_raw)
+    except (TypeError, ValueError):
+        return None
+    age = time.time() - auth_date
+    if age < -300 or age > PLAYER_INITDATA_MAX_AGE:
+        logger.warning("[PlayerAuth] Telegram initData is outside the allowed auth_date window")
+        return None
     if not BOT_TOKEN:
-        logger.warning("[PlayerAuth] BOT_TOKEN not set — accepting unverified initData (dev mode)")
+        allow_unverified = os.getenv("ALLOW_UNVERIFIED_INITDATA", "false").lower() == "true"
+        if not allow_unverified:
+            logger.error("[PlayerAuth] BOT_TOKEN is not configured; refusing unverified initData")
+            return None
+        logger.warning("[PlayerAuth] Accepting unverified initData because ALLOW_UNVERIFIED_INITDATA=true")
         try:
             user = json.loads(params.get("user", "{}"))
         except Exception:
@@ -300,11 +317,42 @@ def _auth_any(request: Request) -> Optional[dict]:
     return None
 
 
+def _require_admin_or_internal(request: Request) -> dict:
+    """Require an admin session or the server-to-server internal key."""
+    identity = _auth_any(request)
+    if not identity:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if identity.get("kind") != "admin" or identity.get("role") not in {"internal", "admin", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Admin or internal access required")
+    return identity
+
+
+def _get_user_operation_lock(user_id: int) -> asyncio.Lock:
+    lock = _user_operation_locks.get(user_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _user_operation_locks[user_id] = lock
+    return lock
+
+
+def _is_banned_user(data: Optional[dict]) -> bool:
+    if not isinstance(data, dict):
+        return False
+    return bool(data.get("banned")) or str(data.get("status", "")).lower() == "banned"
+
+
+def _ensure_player_active(user_id: int) -> None:
+    snap = db.collection("users").document(str(user_id)).get()
+    if snap.exists and _is_banned_user(snap.to_dict()):
+        raise HTTPException(status_code=403, detail="Account is banned")
+
+
 def _require_player(request: Request) -> int:
     """Require a valid player token and return the verified user_id."""
     player = _player_ok(request)
     if not player:
         raise HTTPException(status_code=401, detail="Unauthorized")
+    _ensure_player_active(player["user_id"])
     return player["user_id"]
 
 
@@ -314,6 +362,7 @@ def _actor_user_id(request: Request, fallback: int) -> int:
     if not identity:
         raise HTTPException(status_code=401, detail="Unauthorized")
     if identity.get("kind") == "player":
+        _ensure_player_active(identity["user_id"])
         return identity["user_id"]
     return fallback
 
@@ -346,6 +395,7 @@ def _upsert_player_user(user: dict) -> dict:
         "wins": 0,
         "losses": 0,
         "is_playing": False,
+        "active_round_id": None,
         "created_at": now,
         "updated_at": now,
     }
@@ -364,6 +414,8 @@ async def player_auth(req: PlayerAuthRequest):
     if not user:
         raise HTTPException(status_code=401, detail="Invalid Telegram session")
     user_data = await _db(lambda: _upsert_player_user(user))
+    if _is_banned_user(user_data):
+        raise HTTPException(status_code=403, detail="Account is banned")
     token = _create_player_token(int(user["id"]))
     await broadcast_event("users", str(user["id"]))
     return {
@@ -458,6 +510,7 @@ def get_server_time():
 
 # ─── Background game loop state ───
 _active_game_tasks = {}  # round_id -> asyncio.Task
+_user_operation_locks = {}  # user_id -> asyncio.Lock for wallet operations in this process
 BINGO_NUMBERS = list(range(1, 76))
 NUMBER_CALL_INTERVAL = 5  # seconds
 
@@ -877,7 +930,8 @@ async def start_background_monitor():
 # Cartela Management
 # ═══════════════════════════════════════════════════════════════
 @app.post("/api/cartelas/generate")
-async def generate_cartelas():
+async def generate_cartelas(request: Request):
+    _require_admin_or_internal(request)
     global _cartela_gen_progress
     import threading
     logger.info(f"[CART-DBG] ENDPOINT ENTERED thread={threading.current_thread().name}")
@@ -930,8 +984,9 @@ async def cartela_status():
 
 
 @app.post("/api/cartelas/reset")
-async def reset_cartela_status():
+async def reset_cartela_status(request: Request):
     """Reset cartela generation status (admin use)."""
+    _require_admin_or_internal(request)
     global _cartela_gen_progress
     _cartela_gen_progress = {"status": "idle", "generated": 0, "total": 500, "error": None}
     return {"status": "reset"}
@@ -1062,12 +1117,8 @@ async def unselect_cartela(round_id: str, req: SelectRequest, request: Request):
 
 @app.post("/api/rounds/{round_id}/close-empty")
 async def close_empty_round(round_id: str, request: Request):
-    """Close a stale round that has zero players (sanctioned server-side replacement for
-    the old client-side PATCH that completed empty rounds). Any authed player/admin may
-    call it, but it only acts when the round truly has no players."""
-    identity = _auth_any(request)
-    if not identity:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    """Close a stale empty round from an admin or the internal engine only."""
+    _require_admin_or_internal(request)
 
     def _do_close():
         snap = db.collection('rounds').document(round_id).get()
@@ -1104,8 +1155,9 @@ async def start_round(round_id: str):
 
 
 @app.post("/api/rounds/{round_id}/call")
-async def call_number(round_id: str):
-    """Call the next random number."""
+async def call_number(round_id: str, request: Request):
+    """Call the next random number from an admin or internal engine only."""
+    _require_admin_or_internal(request)
     number = await engine.call_number(round_id)
     if number is None:
         raise HTTPException(status_code=400, detail="No more numbers to call or round not playing")
@@ -1113,15 +1165,17 @@ async def call_number(round_id: str):
 
 
 @app.post("/api/rounds/{round_id}/check-bingo")
-async def check_bingo(round_id: str, req: BingoCheckRequest):
-    """Check if a player has bingo."""
-    result = await engine.check_bingo(round_id, req.user_id)
+async def check_bingo(round_id: str, req: BingoCheckRequest, request: Request):
+    """Check bingo only for the verified player or an admin/internal caller."""
+    user_id = _actor_user_id(request, req.user_id)
+    result = await engine.check_bingo(round_id, user_id)
     return result
 
 
 @app.post("/api/rounds/{round_id}/end")
-async def end_round(round_id: str, req: EndRoundRequest):
-    """End the round and distribute prizes."""
+async def end_round(round_id: str, req: EndRoundRequest, request: Request):
+    """End the round and distribute prizes from an admin or internal engine only."""
+    _require_admin_or_internal(request)
     # Cancel game loop if running
     task = _active_game_tasks.pop(round_id, None)
     if task:
@@ -1152,8 +1206,9 @@ async def get_rounds(limit: int = 20):
 # Dashboard / Stats
 # ═══════════════════════════════════════════════════════════════
 @app.get("/api/dashboard")
-async def get_dashboard():
-    """Get dashboard overview."""
+async def get_dashboard(request: Request):
+    """Get dashboard overview for admins/internal callers."""
+    _require_admin_or_internal(request)
     users = await user_manager.get_all_users()
     total_play = sum(u.get('play_wallet', 0) for u in users)
     total_balance = total_play
@@ -1188,22 +1243,25 @@ async def get_dashboard():
 
 
 @app.get("/api/users")
-async def get_users(limit: int = 100):
-    """Get all users."""
+async def get_users(limit: int = 100, request: Request = None):
+    """Get all users for admins/internal callers."""
+    _require_admin_or_internal(request)
     users = await user_manager.get_all_users(limit)
     return {"users": users}
 
 
 @app.get("/api/users/{user_id}")
-async def get_user(user_id: int):
-    """Get specific user."""
+async def get_user(user_id: int, request: Request):
+    """Get a specific user for admins/internal callers."""
+    _require_admin_or_internal(request)
     user = await user_manager.get_user(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return {"user": user}
 
 @app.post("/api/notify")
-async def notify_user(req: NotifyRequest):
+async def notify_user(req: NotifyRequest, request: Request):
+    _require_admin_or_internal(request)
     try:
         bot = Bot(token=BOT_TOKEN)
         await bot.send_message(chat_id=req.user_id, text=req.text)
@@ -1438,53 +1496,75 @@ async def create_withdrawal(req: WithdrawalCreateRequest, request: Request):
     """Create a pending withdrawal server-side (replaces the old client-side batch that
     decremented play_wallet directly). Validates with the same rules as the bot flow."""
     user_id = _require_player(request)
-    user = await user_manager.get_user(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    user_lock = _get_user_operation_lock(user_id)
+    async with user_lock:
+        # Re-read and revalidate inside the per-user lock. This prevents two
+        # concurrent browser requests in this gateway process from spending the
+        # same wallet balance or creating two pending withdrawals.
+        user = await user_manager.get_user(user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
 
-    amount = req.amount
-    try:
-        amount = float(amount)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="invalid_amount")
-    if not math.isfinite(amount) or amount <= 0:
-        raise HTTPException(status_code=400, detail="invalid_amount")
+        amount = req.amount
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="invalid_amount")
+        if not math.isfinite(amount) or amount <= 0:
+            raise HTTPException(status_code=400, detail="invalid_amount")
 
-    validation = await user_manager.validate_withdrawal(user_id, amount)
-    if not validation.get('ok'):
-        return {"ok": False, **validation}
+        validation = await user_manager.validate_withdrawal(user_id, amount)
+        if not validation.get('ok'):
+            return {"ok": False, **validation}
 
-    phone = (req.phone or '').strip()
-    telebirr_name = (req.telebirr_name or '').strip()
-    if not phone:
-        raise HTTPException(status_code=400, detail="no_phone")
-    if not telebirr_name:
-        raise HTTPException(status_code=400, detail="no_name")
+        phone = (req.phone or '').strip()
+        telebirr_name = (req.telebirr_name or '').strip()
+        if not phone:
+            raise HTTPException(status_code=400, detail="no_phone")
+        if not telebirr_name:
+            raise HTTPException(status_code=400, detail="no_name")
 
-    now = datetime.now(tz=timezone.utc)
-    user_ref = db.collection('users').document(str(user_id))
-    current_pw = float(user.get('play_wallet', 0) or 0)
-    if current_pw < amount:
-        raise HTTPException(status_code=400, detail="insufficient")
-    user_ref.update({
-        'play_wallet': current_pw - amount,
-        'updated_at': now,
-    })
+        now = datetime.now(tz=timezone.utc)
+        user_ref = db.collection('users').document(str(user_id))
+        current_pw = float(user.get('play_wallet', 0) or 0)
+        if current_pw < amount:
+            raise HTTPException(status_code=400, detail="insufficient")
+        debited = False
+        try:
+            user_ref.update({
+                'play_wallet': current_pw - amount,
+                'updated_at': now,
+            })
+            debited = True
 
-    withdrawal_data = {
-        'userId': str(user_id),
-        'username': user.get('username', ''),
-        'firstName': user.get('first_name', 'Unknown'),
-        'telebirrName': telebirr_name,
-        'amount': amount,
-        'phone': phone,
-        'status': 'pending',
-        'createdAt': now,
-        'processedAt': None,
-        'adminNote': '',
-    }
-    withdrawal_ref = db.collection('withdrawals').document()
-    withdrawal_ref.set(withdrawal_data)
+            withdrawal_data = {
+                'userId': str(user_id),
+                'username': user.get('username', ''),
+                'firstName': user.get('first_name', 'Unknown'),
+                'telebirrName': telebirr_name,
+                'amount': amount,
+                'phone': phone,
+                'status': 'pending',
+                'createdAt': now,
+                'processedAt': None,
+                'adminNote': '',
+            }
+            withdrawal_ref = db.collection('withdrawals').document()
+            withdrawal_ref.set(withdrawal_data)
+        except Exception:
+            if debited:
+                try:
+                    user_ref.update({
+                        'play_wallet': current_pw,
+                        'updated_at': datetime.now(tz=timezone.utc),
+                    })
+                except Exception as refund_error:
+                    logger.critical(
+                        "Withdrawal rollback failed for user %s after debit: %s",
+                        user_id,
+                        refund_error,
+                    )
+            raise
     await broadcast_event('users', str(user_id))
 
     # Notify admin via Telegram (same payload as the old /api/admin/withdrawals/notify)
@@ -1964,6 +2044,46 @@ def _authorize_db_write(request: Request, collection: str, doc_id: Optional[str]
     return identity
 
 
+def _authorize_db_read(
+    request: Request,
+    collection: str,
+    doc_id: Optional[str] = None,
+    filters: Optional[str] = None,
+) -> dict:
+    """Authorize document-store reads without exposing private collections.
+
+    Public gameplay collections contain round/card state. Players may read only
+    their own user document and transaction queries constrained to their own
+    userId. Admin/internal identities may read the full store.
+    """
+    identity = _auth_any(request)
+    if collection in PUBLIC_DB_READ_COLLECTIONS:
+        return identity or {"kind": "public"}
+    if not identity:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if identity.get("kind") == "admin":
+        return identity
+    user_id = str(identity.get("user_id"))
+    if collection == "users" and doc_id == user_id:
+        return identity
+    if collection in PLAYER_DB_QUERY_COLLECTIONS:
+        try:
+            parsed = json.loads(filters or "[]")
+        except (TypeError, ValueError):
+            parsed = []
+        own_filter = any(
+            isinstance(item, list)
+            and len(item) == 3
+            and item[0] == "userId"
+            and item[1] in ("==", "equal", "equals")
+            and str(item[2]) == user_id
+            for item in parsed
+        )
+        if own_filter:
+            return identity
+    raise HTTPException(status_code=403, detail="Forbidden")
+
+
 def _sanitize_player_user_data(data: dict) -> dict:
     """Strip server-owned money/stats fields from player-authored user writes."""
     if not isinstance(data, dict):
@@ -1978,7 +2098,8 @@ def _auth_player_db_set(request: Request, collection: str, doc_id: str) -> bool:
 
 
 @app.get("/api/db/{collection}/{doc_id}")
-async def db_get_doc(collection: str, doc_id: str):
+async def db_get_doc(collection: str, doc_id: str, request: Request):
+    _authorize_db_read(request, collection, doc_id)
     snap = db.collection(collection).document(doc_id).get()
     if not snap.exists:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -2023,8 +2144,10 @@ async def db_query_collection(
     filters: Optional[str] = None,  # JSON string: [[field,op,val],...]
     order_by: Optional[str] = None,
     order_dir: str = "ASCENDING",
-    limit_n: Optional[int] = None
+    limit_n: Optional[int] = None,
+    request: Request = None,
 ):
+    _authorize_db_read(request, collection, filters=filters)
     ref = db.collection(collection)
     if filters:
         try:
@@ -2061,13 +2184,43 @@ async def disconnect(sid):
     """Client disconnected."""
     pass
 
+def _socket_identity(data: Optional[dict]) -> Optional[dict]:
+    """Validate the short-lived browser token attached to a subscription."""
+    data = data or {}
+    player_token = str(data.get("player_token") or "").strip()
+    if player_token:
+        info = _verify_token(player_token)
+        if info and info.get("role") == "player":
+            try:
+                return {"kind": "player", "user_id": int(info.get("username"))}
+            except (TypeError, ValueError):
+                return None
+    admin_token = str(data.get("admin_token") or "").strip()
+    if admin_token:
+        info = _verify_token(admin_token)
+        if info and info.get("role") in {"internal", "admin", "super_admin"}:
+            return {"kind": "admin", **info}
+    return None
+
+
 @sio.event
 async def subscribe(sid, data):
-    """Client subscribes to a collection/doc for real-time updates."""
+    """Join only public rooms or rooms authorized for the supplied browser token."""
+    data = data or {}
     collection = data.get('collection')
     doc_id = data.get('doc_id')
+    if not collection or not isinstance(collection, str):
+        return {"ok": False, "error": "Invalid collection"}
+    if collection not in PUBLIC_DB_READ_COLLECTIONS:
+        identity = _socket_identity(data)
+        if not identity:
+            return {"ok": False, "error": "Unauthorized"}
+        if identity.get("kind") == "player":
+            if collection != "users" or str(doc_id) != str(identity.get("user_id")):
+                return {"ok": False, "error": "Forbidden"}
     room = f"{collection}:{doc_id}" if doc_id else collection
     await sio.enter_room(sid, room)
+    return {"ok": True}
 
 @sio.event
 async def unsubscribe(sid, data):

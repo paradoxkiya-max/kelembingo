@@ -38,6 +38,7 @@ class UserManager:
             'wins': 0,
             'losses': 0,
             'is_playing': False,
+            'active_round_id': None,
             'awaiting_screenshot': False,
             'referred_by': None,
             'created_at': datetime.now(tz=timezone.utc),
@@ -113,10 +114,13 @@ class UserManager:
         return True
 
     async def set_playing_status(self, user_id: int, is_playing: bool) -> bool:
-        self.users_ref.document(str(user_id)).update({
+        update = {
             'is_playing': is_playing,
             'updated_at': datetime.now(tz=timezone.utc),
-        })
+        }
+        if not is_playing:
+            update['active_round_id'] = None
+        self.users_ref.document(str(user_id)).update(update)
         return True
 
     async def validate_withdrawal(self, user_id: int, amount: float) -> dict:

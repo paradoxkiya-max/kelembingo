@@ -64,6 +64,7 @@ class RoundEngine:
         self.master_ref = db.collection('cartelas_master')
         self.rounds_ref = db.collection('rounds')
         self._round_locks = {}
+        self._user_locks = {}
 
     # ═══════════════════════════════════════════════════════════════
     # Cartela Generation (one-time, admin-triggered)
@@ -246,12 +247,17 @@ class RoundEngine:
                 'wins': 0,
                 'losses': 0,
                 'is_playing': False,
+                'active_round_id': None,
                 'created_at': datetime.now(tz=timezone.utc),
                 'updated_at': datetime.now(tz=timezone.utc),
             }
             user_ref.set(user_data)
         else:
             user_data = user_doc.to_dict()
+
+        if user_data.get('is_playing'):
+            active_round = user_data.get('active_round_id')
+            return {'error': 'You are already playing in an active round' + (f' ({active_round})' if active_round else '')}
 
         pw = float(user_data.get('play_wallet', 0))
         if pw < total_cost:
@@ -261,6 +267,7 @@ class RoundEngine:
         user_ref.update({
             'play_wallet': pw - total_cost,
             'is_playing': True,
+            'active_round_id': round_id,
             'updated_at': datetime.now(tz=timezone.utc),
         })
 
@@ -278,6 +285,7 @@ class RoundEngine:
                     user_ref.update({
                         'play_wallet': pw,
                         'is_playing': False,
+                        'active_round_id': None,
                         'updated_at': datetime.now(tz=timezone.utc),
                     })
                     return {'error': 'Round is no longer accepting players'}
@@ -289,6 +297,7 @@ class RoundEngine:
                         user_ref.update({
                             'play_wallet': pw,
                             'is_playing': False,
+                            'active_round_id': None,
                             'updated_at': datetime.now(tz=timezone.utc),
                         })
                         return {'error': f'Cartela #{num} was just taken by another player. Please select different cards.'}
@@ -318,6 +327,7 @@ class RoundEngine:
                 user_ref.update({
                     'play_wallet': pw,
                     'is_playing': False,
+                    'active_round_id': None,
                     'updated_at': datetime.now(tz=timezone.utc),
                 })
             except Exception as refund_err:
@@ -329,13 +339,19 @@ class RoundEngine:
         """Player joins a round with chosen cartelas (max 2).
         Serialized per round via asyncio.Lock to prevent DB lock contention and RAM spikes under high concurrency.
         """
+        if user_id not in self._user_locks:
+            self._user_locks[user_id] = asyncio.Lock()
         if round_id not in self._round_locks:
             self._round_locks[round_id] = asyncio.Lock()
 
-        async with self._round_locks[round_id]:
-            return await asyncio.to_thread(
-                self.join_round_sync, round_id, user_id, cartela_numbers, user_name
-            )
+        # Lock the user first so one wallet cannot be reserved by two rounds in
+        # this gateway process. The database-level is_playing guard remains the
+        # source of truth across restarts and separate services.
+        async with self._user_locks[user_id]:
+            async with self._round_locks[round_id]:
+                return await asyncio.to_thread(
+                    self.join_round_sync, round_id, user_id, cartela_numbers, user_name
+                )
 
     async def start_round(self, round_id: str) -> dict:
         """Transition round from 'selecting' to 'playing'."""
@@ -746,6 +762,7 @@ class RoundEngine:
                         'play_wallet': ud.get('play_wallet', 0) + prize_per_winner,
                         'wins': ud.get('wins', 0) + 1,
                         'is_playing': False,
+                        'active_round_id': None,
                         'updated_at': datetime.now(tz=timezone.utc),
                     })
 
@@ -762,6 +779,7 @@ class RoundEngine:
                     user_ref.update({
                         'losses': ud.get('losses', 0) + 1,
                         'is_playing': False,
+                        'active_round_id': None,
                         'updated_at': datetime.now(tz=timezone.utc),
                     })
 

@@ -1,4 +1,5 @@
 import os
+import asyncio
 import logging
 from datetime import datetime, timezone
 from dotenv import load_dotenv
@@ -8,6 +9,8 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+_deposit_locks = {}
+_withdrawal_locks = {}
 
 from config import db
 import firestore_db as firestore
@@ -134,6 +137,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Process deposit
 # ═══════════════════════════════════════════════════════════════════
 async def process_deposit(deposit_id, status, query):
+    lock = _deposit_locks.setdefault(deposit_id, asyncio.Lock())
+    async with lock:
+        return await _process_deposit_impl(deposit_id, status, query)
+
+
+async def _process_deposit_impl(deposit_id, status, query):
     try:
         ref = db.collection('deposits').document(deposit_id)
         result = {}
@@ -212,6 +221,12 @@ async def process_deposit(deposit_id, status, query):
 # Process withdrawal
 # ═══════════════════════════════════════════════════════════════════
 async def process_withdrawal(wid, status, query, context):
+    lock = _withdrawal_locks.setdefault(wid, asyncio.Lock())
+    async with lock:
+        return await _process_withdrawal_impl(wid, status, query, context)
+
+
+async def _process_withdrawal_impl(wid, status, query, context):
     try:
         ref = db.collection('withdrawals').document(wid)
         result = {}
