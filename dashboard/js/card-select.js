@@ -25,6 +25,30 @@ var _playNowReRun = false;
 var _joinInFlight = false;
 var _joinAttemptRoundId = null;
 var _joinedRoundId = null;
+var _roundWaitHandledId = null;
+
+function waitForNextRoundAfterSelection(roundId, stake) {
+    if (!roundId || _roundWaitHandledId === roundId) return;
+    _roundWaitHandledId = roundId;
+    showLoading('Waiting for the next round...');
+    (async function() {
+        for (var attempt = 0; attempt < 90; attempt++) {
+            await new Promise(function(resolve) { setTimeout(resolve, 1000); });
+            try {
+                var snap = await db.collection('rounds').doc(roundId).get();
+                if (!snap.exists || (snap.data().status !== 'selecting' && snap.data().status !== 'playing')) {
+                    _roundWaitHandledId = null;
+                    requestPlayNow(stake);
+                    return;
+                }
+            } catch (e) {
+                // Keep one quiet retry loop during transient REST failures.
+            }
+        }
+        _roundWaitHandledId = null;
+        requestPlayNow(stake);
+    })();
+}
 
 function requestPlayNow(stake) {
     // Re-entrancy-safe entry: if a playNow is already in flight, queue a rerun
@@ -98,11 +122,9 @@ async function playNow(stake) {
                     hideLoading();
                     return;
                 }
-                // 0-player round in playing state — the gateway monitor owns cleanup.
-                await closeEmptyRound(roundId);
-                hideLoading();
-                await new Promise(function(r) { setTimeout(r, 400); });
-                requestPlayNow(stake);
+                // The gateway monitor owns cleanup. Wait for this stale round
+                // to become completed before asking for a replacement.
+                waitForNextRoundAfterSelection(roundId, stake);
                 return;
             }
             if (roundData.players && roundData.players[String(currentUser.id)]) {
@@ -168,11 +190,9 @@ async function playNow(stake) {
                     showToast('Selection ended. Spectating...');
                     return;
                 }
-                // Stale round with no players — server-side close and create new round
-                await closeEmptyRound(roundId);
-                hideLoading();
-                await new Promise(function(r) { setTimeout(r, 400); });
-                requestPlayNow(currentStake);
+                // Stale round with no players — wait for gateway completion and
+                // request exactly one replacement round.
+                waitForNextRoundAfterSelection(roundId, currentStake);
                 return;
             }
         }

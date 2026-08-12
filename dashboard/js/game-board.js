@@ -216,7 +216,11 @@ function startSelectionCountdown(deadlineMs) {
                 var cs = document.getElementById('card-select-screen');
                 if (cs && !cs.classList.contains('hidden')) {
                     cs.classList.add('hidden');
-                    requestPlayNow(currentStake);
+                    if (typeof waitForNextRoundAfterSelection === 'function') {
+                        waitForNextRoundAfterSelection(currentRoundId, currentStake);
+                    } else {
+                        requestPlayNow(currentStake);
+                    }
                 }
             }
         }
