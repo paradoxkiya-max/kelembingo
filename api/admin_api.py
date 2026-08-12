@@ -28,6 +28,9 @@ from telegram import Bot
 # Firebase replaced by SQLAlchemy emulator (firestore_db.py)
 
 logger = logging.getLogger(__name__)
+# Only the designated gateway service may own round progression. The existing
+# in-memory task map cannot coordinate separate Render services by itself.
+GAME_ENGINE_ENABLED = os.getenv("GAME_ENGINE_ENABLED", "true").lower() == "true"
 
 # ─── Async DB Helper ───
 async def _db(call):
@@ -800,7 +803,13 @@ async def _game_loop(round_id: str):
 
 
 def _start_game_loop(round_id: str):
-    """Start a background game loop for a round if one isn't already running."""
+    """Start a background game loop for a round if one isn't already running.
+
+    The task map prevents duplicates inside one process. The environment gate
+    prevents non-owner Render services from creating their own loops.
+    """
+    if not GAME_ENGINE_ENABLED:
+        return
     if round_id in _active_game_tasks:
         return  # already running
     task = asyncio.create_task(_game_loop(round_id))
@@ -810,6 +819,9 @@ def _start_game_loop(round_id: str):
 @app.on_event("startup")
 async def start_background_monitor():
     """Startup: ensures system docs exist, monitors rounds, broadcasts WS events."""
+    if not GAME_ENGINE_ENABLED:
+        logger.info("[GameEngine] disabled for this service; gateway owns round progression")
+        return
     # Ensure admin_status document exists (prevents 404 on onSnapshot)
     try:
         status_doc = await _db(lambda: db.collection('system').document('admin_status').get())

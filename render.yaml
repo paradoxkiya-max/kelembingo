@@ -16,6 +16,9 @@ services:
         value: "1"
       - key: RENDER_API_ONLY
         value: "true"
+      # Exactly one Render service must own round progression.
+      - key: GAME_ENGINE_ENABLED
+        value: "true"
       - key: INTERNAL_API_KEY
         value: your_internal_api_key_here
       - key: BOT_TOKEN
@@ -49,6 +52,9 @@ services:
         value: "1"
       - key: USE_GATEWAY
         value: "true"
+      # Safety guard if this service ever imports the API module.
+      - key: GAME_ENGINE_ENABLED
+        value: "false"
       - key: GATEWAY_URL
         value: https://kelembingo-sqnv.onrender.com
       - key: WEBAPP_URL

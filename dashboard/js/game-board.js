@@ -30,6 +30,14 @@ var _announceProcessing = false;
 })();
 function setupGameBoard() {
     const nums = Object.keys(myCartelas).map(Number);
+    // A single browser session may enter the same round more than once while
+    // the realtime stream is reconnecting. Reset per-round guards only when
+    // the round actually changes; otherwise a replayed snapshot is harmless.
+    if (_gameSessionRoundId !== currentRoundId) {
+        _gameSessionRoundId = currentRoundId;
+        _lastAnnouncedNumber = null;
+        _lastCompletedRoundKey = null;
+    }
     calledNumbers = new Set();
     _bingoDetected = false;
     _autoMarkGrids = null;
@@ -347,7 +355,8 @@ function processRoundSnapshot(data) {
                 autoMarkAllCartelas(num);
                 var _strip = document.getElementById('called-tags');
                 if (_strip) _strip.scrollLeft = _strip.scrollWidth;
-                if (isLast) {
+                if (isLast && num !== _lastAnnouncedNumber) {
+                    _lastAnnouncedNumber = num;
                     showNumberAnnouncement(num);
                     playNumberSound(num);
                 }
@@ -370,6 +379,11 @@ function stopRoundPoll() {
 }
 
 function listenToRound(roundId) {
+    if (_gameSessionRoundId !== roundId) {
+        _gameSessionRoundId = roundId;
+        _lastAnnouncedNumber = null;
+        _lastCompletedRoundKey = null;
+    }
     if (roundUnsubscribe) roundUnsubscribe();
     stopRoundPoll();
 
@@ -458,6 +472,11 @@ function checkBingoLocal(flat, called) {
 
 // ==================== ROUND COMPLETED ====================
 function handleRoundCompleted(data) {
+    // Socket.IO and the REST fallback can deliver the same completed snapshot
+    // more than once. Completion audio/modal work must run only once per round.
+    var completionKey = String(currentRoundId || '') + '|' + String(data.completed_at || data.status || 'completed');
+    if (_lastCompletedRoundKey === completionKey) return;
+    _lastCompletedRoundKey = completionKey;
     if (roundUnsubscribe) { roundUnsubscribe(); roundUnsubscribe = null; }
     stopRoundPoll();
     stopGameCountdown();

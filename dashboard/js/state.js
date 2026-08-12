@@ -20,6 +20,11 @@ var listenerReady = false;
 var isSpectator = false;
 var _lastKnownPlayerCount = 0;
 var serverTimeOffset = 0;
+// Playback/session guards. These prevent reconnects or historical snapshots
+// from replaying the same number or completion audio.
+var _gameSessionRoundId = null;
+var _lastAnnouncedNumber = null;
+var _lastCompletedRoundKey = null;
 
 var SELECTION_DURATION = 45; // seconds for card selection phase
 

@@ -183,6 +183,9 @@ async function playNow(stake) {
 
 // ==================== CARD SELECTION ====================
 async function showCardSelection(roundId, roundData) {
+    // A new round can reuse the same browser tab. Remove the previous fast
+    // Socket.IO callback before installing the handler for this round.
+    _cleanupCartelaPoolListener();
     selectedCartelas = [];
     _originalPlayWallet = currentUser.play_wallet || 0;
     listenerReady = false;
