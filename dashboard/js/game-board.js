@@ -2,6 +2,9 @@
 var _announceTimeout = null;
 var _announceQueue = [];
 var _announceProcessing = false;
+var _gameTimerDeadlineMs = NaN;
+var _gameTimerResyncInFlight = false;
+var _lastGameTimerResyncAt = 0;
 
 // ==================== TAB VISIBILITY ====================
 (function() {
@@ -13,15 +16,8 @@ var _announceProcessing = false;
                     if (!snap.exists) return;
                     var data = snap.data();
                     if (data.status === 'playing') {
-                        var nextAt = data.next_number_at;
-                        if (nextAt) {
-                            var nextMs;
-                            if (typeof nextAt === 'object' && nextAt.toDate) nextMs = nextAt.toDate().getTime();
-                            else if (typeof nextAt === 'string') nextMs = new Date(nextAt).getTime();
-                            else if (typeof nextAt === 'object' && nextAt.seconds) nextMs = nextAt.seconds * 1000;
-                            else nextMs = new Date(nextAt).getTime();
-                            if (!isNaN(nextMs)) startGameCountdown(nextMs);
-                        }
+                        var nextMs = _roundNextNumberMs(data);
+                        if (!isNaN(nextMs)) startGameCountdown(nextMs);
                     }
                 }).catch(function() {});
             }
@@ -44,6 +40,7 @@ function setupGameBoard() {
     _announceQueue = [];
     _announceProcessing = false;
     stopGameCountdown();
+    _gameTimerDeadlineMs = NaN;
     stopRoundPoll();
 
     var el;
@@ -103,25 +100,87 @@ function setupGameBoard() {
 }
 
 // ==================== GAME COUNTDOWN (5s between calls) ====================
+function _timestampMs(value) {
+    if (value === null || value === undefined) return NaN;
+    if (typeof value === 'number') {
+        return value < 100000000000 ? value * 1000 : value;
+    }
+    if (value instanceof Date) return value.getTime();
+    if (typeof value === 'object') {
+        if (typeof value.toDate === 'function') return value.toDate().getTime();
+        if (typeof value.seconds === 'number') {
+            return value.seconds * 1000 + Math.floor((value.nanoseconds || 0) / 1000000);
+        }
+        if (typeof value._seconds === 'number') {
+            return value._seconds * 1000 + Math.floor((value.nanoseconds || 0) / 1000000);
+        }
+        if (value._iso !== undefined) return _timestampMs(value._iso);
+        if (value.iso !== undefined) return _timestampMs(value.iso);
+        if (value.value !== undefined) return _timestampMs(value.value);
+    }
+    if (typeof value === 'string') {
+        var parsed = Date.parse(value);
+        if (!isNaN(parsed)) return parsed;
+        var numeric = Number(value);
+        if (isFinite(numeric)) return _timestampMs(numeric);
+    }
+    return NaN;
+}
+
+function _roundNextNumberMs(data) {
+    var nextMs = _timestampMs(data && data.next_number_at);
+    if (!isNaN(nextMs)) return nextMs;
+
+    // Older rounds may not have next_number_at. Reconstruct the same 5-second
+    // server schedule from the last call or the round start rather than showing
+    // a permanently blank/fallback timer.
+    var lastMs = _timestampMs(data && data.last_called_at);
+    if (!isNaN(lastMs)) return lastMs + 5000;
+    var startedMs = _timestampMs(data && data.game_started_at);
+    var calledCount = (data && data.called_numbers || []).length;
+    if (!isNaN(startedMs)) return startedMs + ((calledCount + 1) * 5000);
+    return NaN;
+}
+
+function _requestGameTimerResync() {
+    if (_gameTimerResyncInFlight || !currentRoundId) return;
+    var now = Date.now();
+    if (now - _lastGameTimerResyncAt < 2500) return;
+    _lastGameTimerResyncAt = now;
+    _gameTimerResyncInFlight = true;
+    db.collection('rounds').doc(currentRoundId).get().then(function(snap) {
+        if (snap.exists && currentRoundId) processRoundSnapshot(snap.data());
+    }).catch(function() {}).finally(function() {
+        _gameTimerResyncInFlight = false;
+    });
+}
+
+function _renderGameCountdown() {
+    if (isNaN(_gameTimerDeadlineMs)) return;
+    var remaining = Math.max(0, Math.ceil((_gameTimerDeadlineMs - serverNow()) / 1000));
+    var timerEl = document.getElementById('game-timer');
+    if (timerEl) {
+        // Keep the field visibly numeric. GO! was misleading because it was
+        // rendered for every missed/stale deadline, not only at the call edge.
+        timerEl.textContent = remaining > 0 ? remaining + 's' : '0s';
+        if (remaining <= 3 && remaining > 0) {
+            timerEl.style.color = '#EF4444';
+            timerEl.style.fontWeight = '900';
+        } else {
+            timerEl.style.color = '';
+            timerEl.style.fontWeight = '';
+        }
+    }
+    if (remaining <= 0) _requestGameTimerResync();
+}
+
 function startGameCountdown(nextMs) {
+    var parsedMs = _timestampMs(nextMs);
+    if (isNaN(parsedMs)) return;
     stopGameCountdown();
-    gameCountdownInterval = setInterval(function() {
-        var remaining = Math.max(0, Math.ceil((nextMs - serverNow()) / 1000));
-        var timerEl = document.getElementById('game-timer');
-        if (timerEl) {
-            timerEl.textContent = remaining > 0 ? remaining + 's' : 'GO!';
-            if (remaining <= 3 && remaining > 0) {
-                timerEl.style.color = '#EF4444';
-                timerEl.style.fontWeight = '900';
-            } else {
-                timerEl.style.color = '';
-                timerEl.style.fontWeight = '';
-            }
-        }
-        if (remaining <= 0) {
-            stopGameCountdown();
-        }
-    }, 1000);
+    _gameTimerDeadlineMs = parsedMs;
+    _renderGameCountdown();
+    gameCountdownInterval = setInterval(_renderGameCountdown, 200);
 }
 
 function stopGameCountdown() {
@@ -324,24 +383,8 @@ function processRoundSnapshot(data) {
             return;
         }
 
-        var nextAt = data.next_number_at;
-        if (nextAt) {
-            var nextMs;
-            if (typeof nextAt === 'object' && nextAt.toDate) {
-                nextMs = nextAt.toDate().getTime();
-            } else if (typeof nextAt === 'string') {
-                nextMs = new Date(nextAt).getTime();
-            } else if (typeof nextAt === 'object' && nextAt._iso) {
-                nextMs = new Date(nextAt._iso).getTime();
-            } else if (typeof nextAt === 'object' && nextAt.seconds) {
-                nextMs = nextAt.seconds * 1000;
-            } else {
-                nextMs = new Date(nextAt).getTime();
-            }
-            if (!isNaN(nextMs)) {
-                startGameCountdown(nextMs);
-            }
-        }
+        var nextMs = _roundNextNumberMs(data);
+        if (!isNaN(nextMs)) startGameCountdown(nextMs);
 
         var called = data.called_numbers || [];
         var prevCount = calledNumbers.size;
