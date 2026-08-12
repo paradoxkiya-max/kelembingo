@@ -22,6 +22,9 @@ function countTotalPendingSelections(pendingSelections) {
 // ==================== PLAY NOW ====================
 var _playNowRunning = false;
 var _playNowReRun = false;
+var _joinInFlight = false;
+var _joinAttemptRoundId = null;
+var _joinedRoundId = null;
 
 function requestPlayNow(stake) {
     // Re-entrancy-safe entry: if a playNow is already in flight, queue a rerun
@@ -31,16 +34,10 @@ function requestPlayNow(stake) {
 }
 
 function closeEmptyRound(roundId) {
-    // Server-side, sanctioned cleanup for stale empty rounds (replaces the old
-    // client-side PATCH that force-completed round docs).
-    if (!roundId) return Promise.resolve();
-    var apiBase = window.BACKEND_URL || window.API_BASE || window.location.origin;
-    var path = '/api/rounds/' + roundId + '/close-empty';
-    if (window.playerApi) return window.playerApi('POST', path).catch(function() {});
-    return fetch(apiBase + path, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-    }).catch(function() {});
+    // Empty-round cleanup belongs to the gateway monitor. A player token must
+    // not call the admin/internal close-empty route, which only creates 403s
+    // and can race a just-completed join request.
+    return Promise.resolve();
 }
 
 async function playNow(stake) {
@@ -89,12 +86,19 @@ async function playNow(stake) {
         roundData = doc.data();
         roundId = doc.id;
         currentRoundId = roundId;
+        if (_joinedRoundId !== roundId) _joinedRoundId = null;
 
         // Already playing — check if user is a player
         if (roundData.status === 'playing') {
             var pc = roundData.player_count || 0;
             if (pc <= 0) {
-                // 0-player round in playing state — server-side cancel and restart
+                if ((_joinInFlight && _joinAttemptRoundId === roundId) || _joinedRoundId === roundId) {
+                    // Do not clean up a round while this player's join is being
+                    // committed or while a stale snapshot omits its membership.
+                    hideLoading();
+                    return;
+                }
+                // 0-player round in playing state — the gateway monitor owns cleanup.
                 await closeEmptyRound(roundId);
                 hideLoading();
                 await new Promise(function(r) { setTimeout(r, 400); });
@@ -109,6 +113,13 @@ async function playNow(stake) {
                 var freshData = freshSnap.exists ? freshSnap.data() : roundData;
                 await loadMyCartelas(freshData);
                 listenToRound(roundId);
+                return;
+            } else if ((_joinInFlight && _joinAttemptRoundId === roundId) || _joinedRoundId === roundId) {
+                // The round may start before the join response or membership
+                // snapshot reaches this browser. Never downgrade a confirmed or
+                // in-flight player because of one stale snapshot.
+                isSpectator = false;
+                hideLoading();
                 return;
             } else {
                 // Spectator mode — only for rounds with actual players
@@ -340,19 +351,25 @@ async function showCardSelection(roundId, roundData) {
                 var cs = document.getElementById('card-select-screen');
                 if (cs && cs.classList.contains('hidden')) return;
                 var livePC = rd.player_count || 0;
+                var uid = String(currentUser.id);
+                if (selectedCartelas.length > 0 || (_joinInFlight && _joinAttemptRoundId === roundId)) {
+                    // The round can transition while the join response is still
+                    // returning. Keep the selected player in the join path.
+                    if (!_joinInFlight && !_joinedRoundId) confirmSelection();
+                    return;
+                }
                 if (livePC <= 0) {
-                    // 0-player round started playing — server-side cancel and restart
+                    // Empty-round cleanup belongs to the gateway monitor. Do not
+                    // call the admin-only endpoint with a player token.
                     if (roundUnsubscribe) { roundUnsubscribe(); roundUnsubscribe = null; }
                     stopSelectionCountdown();
                     selectedCartelas = [];
                     myCartelas = {};
                     calledNumbers = new Set();
                     _previewCache = {};
-                    closeEmptyRound(roundId);
-                    setTimeout(function() { requestPlayNow(currentStake); }, 400);
+                    setTimeout(function() { requestPlayNow(currentStake); }, 1200);
                     return;
                 }
-                var uid = String(currentUser.id);
                 if (rd.players && rd.players[uid]) {
                     document.getElementById('card-select-screen').classList.add('hidden');
                     stopSelectionCountdown();
@@ -632,7 +649,7 @@ async function enterSpectatorMode() {
 
 // ==================== CONFIRM SELECTION & JOIN ROUND ====================
 async function confirmSelection() {
-    if (selectedCartelas.length === 0) return;
+    if (selectedCartelas.length === 0 || _joinInFlight) return;
     
     // Hard client-side validation
     var currentRoundData = null;
@@ -666,6 +683,10 @@ async function confirmSelection() {
         }
     }
     
+    var joinRoundId = currentRoundId;
+    var chosenCartelas = selectedCartelas.slice();
+    _joinInFlight = true;
+    _joinAttemptRoundId = joinRoundId;
     isSpectator = false;
     showLoading('Joining round...');
 
@@ -673,18 +694,18 @@ async function confirmSelection() {
         var apiBase = window.BACKEND_URL || window.API_BASE || window.location.origin || (window.location.protocol + '//' + window.location.host);
         var res;
         if (window.playerApi) {
-            res = await window.playerApi('POST', '/api/rounds/' + currentRoundId + '/join', {
+            res = await window.playerApi('POST', '/api/rounds/' + joinRoundId + '/join', {
                 user_id: currentUser.id,
-                cartela_numbers: selectedCartelas,
+                cartela_numbers: chosenCartelas,
                 user_name: currentUser.first_name || 'Player'
             });
         } else {
-            res = await fetch(apiBase + '/api/rounds/' + currentRoundId + '/join', {
+            res = await fetch(apiBase + '/api/rounds/' + joinRoundId + '/join', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     user_id: currentUser.id,
-                    cartela_numbers: selectedCartelas,
+                    cartela_numbers: chosenCartelas,
                     user_name: currentUser.first_name || 'Player'
                 })
             });
@@ -695,8 +716,10 @@ async function confirmSelection() {
             throw new Error(data.detail || data.error || 'Error joining round');
         }
 
-        for (var i = 0; i < selectedCartelas.length; i++) {
-            var num = selectedCartelas[i];
+        _joinedRoundId = joinRoundId;
+        isSpectator = false;
+        for (var i = 0; i < chosenCartelas.length; i++) {
+            var num = chosenCartelas[i];
             if (_previewCache[num]) {
                 myCartelas[num] = _previewCache[num];
             } else {
@@ -717,18 +740,21 @@ async function confirmSelection() {
         if (roundUnsubscribe) { roundUnsubscribe(); roundUnsubscribe = null; }
         await navigateTo('game');
         setupGameBoard();
-        listenToRound(currentRoundId);
+        listenToRound(joinRoundId);
         showToast('Joined! Waiting for game to start...');
     } catch (err) {
         hideLoading();
         console.error('Error joining round:', err);
         var msg = err.message || '';
-        if (msg.indexOf('Spectating') !== -1 || msg.indexOf('already started') !== -1 || msg.indexOf('finished') !== -1) {
+        if (msg.indexOf('Spectating') !== -1 || msg.indexOf('already started') !== -1 || msg.indexOf('finished') !== -1 || msg.indexOf('no longer accepting') !== -1) {
             showToast('Round ended just before your pick was confirmed. Finding new game...');
             if (roundUnsubscribe) { roundUnsubscribe(); roundUnsubscribe = null; }
             requestPlayNow(currentStake);
         } else {
             showToast('Error: ' + msg);
         }
+    } finally {
+        _joinInFlight = false;
+        _joinAttemptRoundId = null;
     }
 }
