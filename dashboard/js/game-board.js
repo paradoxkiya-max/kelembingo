@@ -177,6 +177,9 @@ function _renderGameCountdown() {
 function startGameCountdown(nextMs) {
     var parsedMs = _timestampMs(nextMs);
     if (isNaN(parsedMs)) return;
+    // Socket.IO, REST fallback, and visibility re-sync can arrive out of order.
+    // Never replace a newer deadline with an older snapshot's already-expired one.
+    if (!isNaN(_gameTimerDeadlineMs) && parsedMs < _gameTimerDeadlineMs - 750) return;
     stopGameCountdown();
     _gameTimerDeadlineMs = parsedMs;
     _renderGameCountdown();
@@ -360,6 +363,15 @@ function processRoundSnapshot(data) {
     var elCountdown = document.getElementById('game-countdown');
 
     var playerCount = data.player_count || 0;
+    var currentUid = currentUser ? String(currentUser.id) : null;
+    var serverPlayerInfo = currentUid && data.players ? data.players[currentUid] : null;
+    if (serverPlayerInfo) {
+        isSpectator = false;
+        _joinedRoundId = currentRoundId;
+        if (Object.keys(myCartelas || {}).length === 0 && !_joinInFlight) {
+            loadMyCartelas(data);
+        }
+    }
     var roundStake = data.stake || currentStake || 10;
     var derash = Math.round(playerCount * roundStake * 0.75 * 10) / 10;
     if (elPlayers) elPlayers.textContent = playerCount;
@@ -631,6 +643,8 @@ function loadMyCartelas(roundData) {
         isSpectator = true;
         return Promise.resolve();
     }
+    isSpectator = false;
+    _joinedRoundId = currentRoundId;
     myCartelas = {};
     var promises = (playerInfo.cartelas || []).map(function(num) {
         return db.collection('cartelas_master').doc(String(num)).get().then(function(doc) {
@@ -663,6 +677,7 @@ function loadMyCartelas(roundData) {
 
 function leaveGame() {
     isSpectator = false;
+    _joinedRoundId = null;
     listenerReady = false;
     if (roundUnsubscribe) { roundUnsubscribe(); roundUnsubscribe = null; }
     if (_announceTimeout) { clearTimeout(_announceTimeout); _announceTimeout = null; }
