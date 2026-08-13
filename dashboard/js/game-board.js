@@ -5,6 +5,7 @@ var _announceProcessing = false;
 var _gameTimerDeadlineMs = NaN;
 var _gameTimerResyncInFlight = false;
 var _lastGameTimerResyncAt = 0;
+var _myCartelasLoadInFlight = false;
 
 // ==================== TAB VISIBILITY ====================
 (function() {
@@ -372,7 +373,7 @@ function processRoundSnapshot(data) {
     if (serverPlayerInfo) {
         isSpectator = false;
         _joinedRoundId = currentRoundId;
-        if (Object.keys(myCartelas || {}).length === 0 && !_joinInFlight) {
+        if (Object.keys(myCartelas || {}).length === 0 && !_joinInFlight && !_myCartelasLoadInFlight) {
             loadMyCartelas(data);
         }
     }
@@ -641,12 +642,15 @@ function showWinModal(data, isWinner) {
 
 function loadMyCartelas(roundData) {
     if (!currentUser) { isSpectator = true; return Promise.resolve(); }
+    if (_myCartelasLoadInFlight) return Promise.resolve();
     var uidStr = String(currentUser.id);
     var playerInfo = roundData.players ? roundData.players[uidStr] : null;
     if (!playerInfo) {
         isSpectator = true;
         return Promise.resolve();
     }
+    _myCartelasLoadInFlight = true;
+    var loadRoundId = currentRoundId;
     isSpectator = false;
     _joinedRoundId = currentRoundId;
     myCartelas = {};
@@ -656,6 +660,7 @@ function loadMyCartelas(roundData) {
         });
     });
     return Promise.all(promises).then(function() {
+        if (currentRoundId !== loadRoundId) return;
         setupGameBoard();
         var called = roundData.called_numbers || [];
         var el;
@@ -673,9 +678,17 @@ function loadMyCartelas(roundData) {
             if (strip) strip.scrollLeft = strip.scrollWidth;
             autoMarkAllCartelas(num);
         });
+        // setupGameBoard() clears the countdown while it rebuilds the DOM.
+        // Restart it from the authoritative snapshot after cartelas finish loading.
+        if (roundData.status === 'playing') {
+            var nextMs = _roundNextNumberMs(roundData);
+            if (!isNaN(nextMs)) startGameCountdown(nextMs);
+        }
     }).catch(function(err) {
         console.error('Error loading cartelas:', err);
         showToast('Error loading cartela data');
+    }).finally(function() {
+        _myCartelasLoadInFlight = false;
     });
 }
 
@@ -698,6 +711,7 @@ function leaveGame() {
     _announceQueue = [];
     _announceProcessing = false;
     if (_announceTimeout) { clearTimeout(_announceTimeout); _announceTimeout = null; }
+    _myCartelasLoadInFlight = false;
     myCartelas = {};
     calledNumbers = new Set();
     selectedCartelas = [];

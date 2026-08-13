@@ -12,7 +12,7 @@ except FileNotFoundError:
     pass
 os.environ["DATABASE_URL"] = f"sqlite:///{db_path}"
 os.environ["GAME_ENGINE_ENABLED"] = "false"
-os.environ["RENDER_API_ONLY"] = "true"
+os.environ["RENDER_API_ONLY"] = "false"
 os.environ["BOT_TOKEN"] = "test-token"
 os.environ["ADMIN_PASSWORD"] = "test-password"
 

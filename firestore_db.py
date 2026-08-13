@@ -12,11 +12,21 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 
 logger = logging.getLogger(__name__)
 
-# Determine DATABASE_URL
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
+# Determine DATABASE_URL. The Render gateway must fail closed rather than
+# silently starting against a local SQLite file if its Supabase connection is
+# missing or misconfigured. Local development/tests retain the SQLite default.
+_RAW_DATABASE_URL = os.getenv("DATABASE_URL")
+_IS_RENDER_GATEWAY = os.getenv("RENDER_API_ONLY", "").lower() == "true"
+if not _RAW_DATABASE_URL:
+    if _IS_RENDER_GATEWAY:
+        raise RuntimeError("DATABASE_URL must be a PostgreSQL URL for the Render gateway")
     DATABASE_URL = "sqlite:///kelembingo.db"
-elif DATABASE_URL.startswith("postgres://"):
+else:
+    DATABASE_URL = _RAW_DATABASE_URL
+    if _IS_RENDER_GATEWAY and not DATABASE_URL.startswith(("postgresql://", "postgres://")):
+        raise RuntimeError("Render gateway DATABASE_URL must use PostgreSQL")
+
+if DATABASE_URL.startswith("postgres://"):
     # SQLAlchemy 1.4+ requires postgresql:// instead of postgres://
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
