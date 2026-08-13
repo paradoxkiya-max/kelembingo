@@ -5,7 +5,8 @@ import uuid
 from datetime import datetime, date, timezone
 import logging
 import sqlalchemy
-from sqlalchemy import create_engine, Column, String, Text, DateTime, func
+from sqlalchemy import create_engine, Column, String, Text, DateTime, Numeric, cast, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -287,6 +288,31 @@ class WriteBatch:
         finally:
             self._session.close()
 
+_NUMERIC_QUERY_FIELDS = {
+    "number", "stake", "wins", "prize", "amount", "balance", "bonus",
+    "wallet", "play_wallet", "cartela_number",
+}
+
+
+def _json_scalar_expr(field: str):
+    """Return a dialect-compatible scalar expression for a JSON document field."""
+    path = field.split(".")
+    if engine.dialect.name == "postgresql":
+        return func.jsonb_extract_path_text(
+            cast(FirestoreDocument.data, JSONB), *path
+        )
+    return func.json_extract(FirestoreDocument.data, "$." + field)
+
+
+def _sql_scalar_value(value):
+    """Normalize Firestore values for PostgreSQL text scalar extraction."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return value
+
+
 class CollectionRef:
     def __init__(self, collection_name, session=None):
         self.collection_name = collection_name
@@ -328,9 +354,11 @@ class CollectionRef:
     def _build_sql_filter(self, field: str, op: str, val) -> tuple:
         """Build a SQLAlchemy WHERE clause from a Firestore-style filter.
         Returns (clause, params_dict) or (None, {}) if not convertible."""
-        # Convert dotted field to json_extract path: 'ocr.status' -> '$.ocr.status'
-        json_path = '$.' + field
-        extract = func.json_extract(FirestoreDocument.data, json_path)
+        extract = _json_scalar_expr(field)
+        field_name = field.rsplit('.', 1)[-1]
+        is_postgres = engine.dialect.name == "postgresql"
+        if is_postgres and field_name in _NUMERIC_QUERY_FIELDS:
+            extract = cast(extract, Numeric)
 
         op_map = {
             '==': lambda col, v: col == v,
@@ -351,16 +379,30 @@ class CollectionRef:
         }
 
         if op == 'array-contains':
-            # json_each for array containment — fall back to Python filter
+            # Fall back to Python-side filtering for array containment.
             return None, {}
 
         maker = op_map.get(op)
         if maker is None:
             return None, {}
 
-        # Handle type coercion — extract returns text, cast for numeric comparisons
-        # SQLite's json_extract returns typed values for numbers/booleans
-        clause = maker(extract, val)
+        if op == 'in':
+            sql_val = [
+                value if not is_postgres
+                else (
+                    value if field_name in _NUMERIC_QUERY_FIELDS
+                    else _sql_scalar_value(value)
+                )
+                for value in val
+            ]
+        elif not is_postgres:
+            sql_val = val
+        elif field_name in _NUMERIC_QUERY_FIELDS:
+            sql_val = val
+        else:
+            sql_val = _sql_scalar_value(val)
+
+        clause = maker(extract, sql_val)
         return clause, {}
 
     def _execute_query(self):
@@ -383,8 +425,9 @@ class CollectionRef:
             # Apply ordering at SQL level if possible
             if self._order_by:
                 field, direction = self._order_by
-                json_path = '$.' + field
-                extract = func.json_extract(FirestoreDocument.data, json_path)
+                extract = _json_scalar_expr(field)
+                if engine.dialect.name == "postgresql" and field.rsplit('.', 1)[-1] in _NUMERIC_QUERY_FIELDS:
+                    extract = cast(extract, Numeric)
                 if "DESC" in str(direction).upper():
                     query = query.order_by(extract.desc())
                 else:
