@@ -229,16 +229,21 @@ def commit_round_number(
 
 
 def _next_number_at(started_at, call_count):
-    """Compute the next-number deadline without importing game-engine helpers."""
+    """Compute a future next-number deadline without publishing 0s/1s."""
+    from datetime import timedelta
+    now = datetime.now(tz=timezone.utc)
+    minimum_deadline = now + timedelta(seconds=5)
     if isinstance(started_at, str):
         try:
             started_at = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
         except ValueError:
-            return None
+            return minimum_deadline
     if started_at is None or not hasattr(started_at, "__add__"):
-        return None
-    from datetime import timedelta
-    return started_at + timedelta(seconds=5 * (int(call_count) + 1))
+        return minimum_deadline
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    anchored_deadline = started_at + timedelta(seconds=5 * (int(call_count) + 1))
+    return max(anchored_deadline, minimum_deadline)
 
 
 def join_round(

@@ -29,6 +29,6 @@ jobs:
       - name: Verify SQLite query compatibility
         run: python tools/test_sqlite_query_adapter.py
       - name: Verify mobile game timer regression
-        run: node --check dashboard/js/game-board.js && python tools/test_game_timer_regression.py
+        run: node --check dashboard/js/game-board.js && python tools/test_game_timer_regression.py && python tools/test_timer_schedule.py
       - name: Verify production database guard
         run: python tools/test_database_config_guard.py

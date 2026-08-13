@@ -739,36 +739,27 @@ async def _game_loop(round_id: str):
                     await broadcast_event('rounds', round_id)
                 return
 
-            # Sleep until the strict 5s grid deadline (anchored to game_started_at).
-            # This keeps the cadence exact across the whole round and across devices —
-            # no drift from CPU/DB latency. If the grid fell far behind (e.g. after a
-            # long outage) re-anchor it to now so the game doesn't burst-fire numbers.
-            started = _parse_dt(data.get('game_started_at'))
+            # Keep a visible five-second countdown between calls. Prefer the
+            # durable deadline written with the previous number. If computation or
+            # database work caused that deadline to pass, re-anchor the next call to
+            # now + 5s instead of broadcasting a nearly-expired 0s/1s deadline.
+            now = datetime.now(tz=timezone.utc)
             called_count = len(data.get('called_numbers', []))
-            if started:
-                deadline = started + timedelta(seconds=(called_count + 1) * NUMBER_CALL_INTERVAL)
-                delay = (deadline - datetime.now(tz=timezone.utc)).total_seconds()
-                if delay > NUMBER_CALL_INTERVAL:
-                    new_start = datetime.now(tz=timezone.utc)
-                    await _db(lambda: db.collection('rounds').document(round_id).update({
-                        'game_started_at': new_start,
-                        'next_number_at': new_start + timedelta(seconds=(called_count + 1) * NUMBER_CALL_INTERVAL),
-                    }))
-                    deadline = new_start + timedelta(seconds=(called_count + 1) * NUMBER_CALL_INTERVAL)
-                    delay = (deadline - datetime.now(tz=timezone.utc)).total_seconds()
-                if delay > 0:
-                    await asyncio.sleep(delay)
-            else:
-                next_at = data.get('next_number_at')
-                if next_at:
-                    if isinstance(next_at, str):
-                        next_at = datetime.fromisoformat(next_at.replace('Z', '+00:00'))
-                    elif isinstance(next_at, datetime):
-                        if next_at.tzinfo is None:
-                            next_at = next_at.replace(tzinfo=timezone.utc)
-                    delay = (next_at - datetime.now(tz=timezone.utc)).total_seconds()
-                    if delay > 0:
-                        await asyncio.sleep(delay)
+            deadline = _parse_dt(data.get('next_number_at'))
+            if deadline is None:
+                started = _parse_dt(data.get('game_started_at'))
+                if started:
+                    deadline = started + timedelta(seconds=(called_count + 1) * NUMBER_CALL_INTERVAL)
+
+            if deadline is None or deadline <= now:
+                deadline = now + timedelta(seconds=NUMBER_CALL_INTERVAL)
+                await _db(lambda: db.collection('rounds').document(round_id).update({
+                    'next_number_at': deadline,
+                }))
+
+            delay = (deadline - datetime.now(tz=timezone.utc)).total_seconds()
+            if delay > 0:
+                await asyncio.sleep(delay)
 
             already_called = set(data.get('called_numbers', []))
             available = [n for n in BINGO_NUMBERS if n not in already_called]
