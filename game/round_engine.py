@@ -60,9 +60,13 @@ def _grid_next_number_at(game_started_at, calls_made: int) -> datetime:
     """
     started = _parse_dt(game_started_at)
     now = datetime.now(tz=timezone.utc)
+    minimum_deadline = now + timedelta(seconds=NUMBER_CALL_INTERVAL)
     if started is None:
-        return now + timedelta(seconds=NUMBER_CALL_INTERVAL)
-    return started + timedelta(seconds=(calls_made + 1) * NUMBER_CALL_INTERVAL)
+        return minimum_deadline
+    anchored_deadline = started + timedelta(seconds=(calls_made + 1) * NUMBER_CALL_INTERVAL)
+    # Preserve the anchored cadence when processing is on time; otherwise give
+    # the client a full visible interval instead of publishing an expired timer.
+    return max(anchored_deadline, minimum_deadline)
 
 class RoundEngine:
     def __init__(self, db):
