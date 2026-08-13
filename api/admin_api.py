@@ -19,6 +19,7 @@ import datetime
 import urllib.parse
 from config import db, BOT_TOKEN
 from firestore_db import MockFirestoreClient, SessionLocal, SystemEvent, FieldFilter, Increment, ArrayUnion
+from startup_state import is_database_ready
 
 from game.round_engine import RoundEngine, DEFAULT_STAKE, VALID_STAKES, SELECTION_DURATION, GAME_LENGTH_RANGE, _parse_dt, _grid_next_number_at
 from handlers.user_manager import UserManager
@@ -150,6 +151,17 @@ AUTH_TOKEN_TTL = int(os.getenv("ADMIN_AUTH_TTL_HOURS", "12")) * 3600
 PROTECTED_DB_COLLECTIONS = {"admins", "system", "settings", "bot_content"}
 PUBLIC_ADMIN_PATHS = {"/api/admin/login"}
 PUBLIC_DB_READ_COLLECTIONS = {"rounds", "cartelas_master", "cartelas"}
+DATABASE_GATED_PREFIXES = (
+    "/api/player",
+    "/api/rounds",
+    "/api/cartelas",
+    "/api/deposits",
+    "/api/withdrawals",
+    "/api/wallet",
+    "/api/users",
+    "/api/history",
+)
+DATABASE_GATED_EXACT_PATHS = {"/api/auth/login", "/api/auth/me"}
 PLAYER_DB_QUERY_COLLECTIONS = {"deposits", "withdrawals"}
 
 
@@ -392,6 +404,60 @@ class PlayerAuthRequest(BaseModel):
     initData: str
 
 
+@app.post("/api/player/reconcile-state")
+async def reconcile_player_state(request: Request):
+    """Reconcile a player's active-round pointer without changing funds.
+
+    A pointer is cleared only when its round is missing, cancelled, or fully
+    paid/refunded without the player remaining in the round. Valid active and
+    still-settling rounds are preserved so a player cannot double-join.
+    """
+    user_id = _require_player(request)
+
+    def _reconcile():
+        user_ref = db.collection("users").document(str(user_id))
+        user_snap = user_ref.get()
+        if not user_snap.exists:
+            return {"ok": False, "error": "User not found"}
+        user_data = user_snap.to_dict()
+        active_id = user_data.get("active_round_id")
+        if not user_data.get("is_playing") or not active_id:
+            return {"ok": True, "active": False, "user": user_data}
+
+        round_snap = db.collection("rounds").document(str(active_id)).get()
+        round_data = round_snap.to_dict() if round_snap.exists else None
+        player_key = str(user_id)
+        member = bool(round_data and player_key in (round_data.get("players", {}) or {}))
+        status = round_data.get("status") if round_data else None
+        fully_settled = bool(round_data and round_data.get("payout_processed"))
+        clear_stale = (
+            not round_data
+            or status == "cancelled"
+            or (status == "completed" and fully_settled)
+            or not member
+        )
+        if clear_stale:
+            user_ref.update({
+                "is_playing": False,
+                "active_round_id": None,
+                "updated_at": datetime.now(tz=timezone.utc),
+            })
+            user_data["is_playing"] = False
+            user_data["active_round_id"] = None
+            return {"ok": True, "active": False, "cleared": True, "user": user_data}
+
+        return {
+            "ok": True,
+            "active": True,
+            "active_round_id": str(active_id),
+            "round_status": status,
+            "settling": status == "completed" and not fully_settled,
+            "user": user_data,
+        }
+
+    return await asyncio.to_thread(_reconcile)
+
+
 @app.post("/api/player/auth")
 async def player_auth(req: PlayerAuthRequest):
     """Verify Telegram initData and issue a short-lived player token."""
@@ -480,6 +546,16 @@ async def auth_middleware(request: Request, call_next):
     elif path.startswith("/api/db") and method in ("POST", "PATCH", "PUT", "DELETE"):
         needs_auth = True
 
+    if (
+        path in DATABASE_GATED_EXACT_PATHS
+        or path.startswith(DATABASE_GATED_PREFIXES)
+        or path.startswith("/api/admin")
+        or path.startswith("/api/db")
+    ) and not is_database_ready():
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Database is still initializing; try again shortly.", "ready": False},
+        )
     if needs_auth:
         identity = _auth_any(request)
         if not identity:
@@ -847,59 +923,67 @@ def _start_game_loop(round_id: str):
 
 @app.on_event("startup")
 async def start_background_monitor():
-    """Startup: ensures system docs exist, monitors rounds, broadcasts WS events."""
+    """Start round monitoring only after database initialization has completed."""
     if not GAME_ENGINE_ENABLED:
         logger.info("[GameEngine] disabled for this service; gateway owns round progression")
         return
-    # Ensure admin_status document exists (prevents 404 on onSnapshot)
-    try:
-        status_doc = await _db(lambda: db.collection('system').document('admin_status').get())
-        if not status_doc.exists:
-            await _db(lambda: db.collection('system').document('admin_status').set({'online': False}))
-    except Exception:
-        pass
 
-    async def _monitor():
-        while True:
-            try:
-                # Find all currently active rounds (selecting or playing)
-                def _read_rounds():
-                    selecting = list(db.collection('rounds').where('status', '==', 'selecting').get())
-                    playing = list(db.collection('rounds').where('status', '==', 'playing').get())
-                    return selecting, playing
-                selecting_docs, playing_docs = await asyncio.to_thread(_read_rounds)
-                
-                # Start game loops for any selecting rounds that haven't been started
-                for doc in selecting_docs:
-                    rid = doc.id
-                    if rid not in _active_game_tasks:
-                        _start_game_loop(rid)
+    async def _start_when_ready():
+        while not is_database_ready():
+            await asyncio.sleep(1)
 
-                # H1: Resume game loops for playing rounds orphaned by a restart
-                for doc in playing_docs:
-                    rid = doc.id
-                    if rid not in _active_game_tasks:
-                        logger.info(f"[Monitor] Resuming orphaned playing round {rid}")
-                        _start_game_loop(rid)
-                        
-                # ── Continuous Loop Enforcement ──
-                # Ensure every stake has an active round (selecting or playing).
-                active_stakes = set()
-                for doc in selecting_docs + playing_docs:
-                    rd = doc.to_dict()
-                    s = rd.get('stake', DEFAULT_STAKE)
-                    active_stakes.add(s)
-                for stake_val in VALID_STAKES:
-                    if stake_val not in active_stakes:
-                        result = await engine.create_round(stake=stake_val)
-                        if 'id' in result:
-                            _start_game_loop(result['id'])
-                        
-            except Exception as e:
-                logger.warning(f"Error in background monitor: {e}")
-            await asyncio.sleep(5)
-    asyncio.create_task(_monitor())
-    asyncio.create_task(_event_broadcast_loop())
+        # Ensure admin_status document exists (prevents 404 on onSnapshot)
+        try:
+            status_doc = await _db(lambda: db.collection('system').document('admin_status').get())
+            if not status_doc.exists:
+                await _db(lambda: db.collection('system').document('admin_status').set({'online': False}))
+        except Exception:
+            pass
+
+        async def _monitor():
+            while True:
+                try:
+                    # Find all currently active rounds (selecting or playing)
+                    def _read_rounds():
+                        selecting = list(db.collection('rounds').where('status', '==', 'selecting').get())
+                        playing = list(db.collection('rounds').where('status', '==', 'playing').get())
+                        return selecting, playing
+                    selecting_docs, playing_docs = await asyncio.to_thread(_read_rounds)
+
+                    # Start game loops for any selecting rounds that haven't been started
+                    for doc in selecting_docs:
+                        rid = doc.id
+                        if rid not in _active_game_tasks:
+                            _start_game_loop(rid)
+
+                    # H1: Resume game loops for playing rounds orphaned by a restart
+                    for doc in playing_docs:
+                        rid = doc.id
+                        if rid not in _active_game_tasks:
+                            logger.info(f"[Monitor] Resuming orphaned playing round {rid}")
+                            _start_game_loop(rid)
+
+                    # ── Continuous Loop Enforcement ──
+                    # Ensure every stake has an active round (selecting or playing).
+                    active_stakes = set()
+                    for doc in selecting_docs + playing_docs:
+                        rd = doc.to_dict()
+                        s = rd.get('stake', DEFAULT_STAKE)
+                        active_stakes.add(s)
+                    for stake_val in VALID_STAKES:
+                        if stake_val not in active_stakes:
+                            result = await engine.create_round(stake=stake_val)
+                            if 'id' in result:
+                                _start_game_loop(result['id'])
+
+                except Exception as e:
+                    logger.warning(f"Error in background monitor: {e}")
+                await asyncio.sleep(5)
+
+        asyncio.create_task(_monitor())
+        asyncio.create_task(_event_broadcast_loop())
+
+    asyncio.create_task(_start_when_ready())
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1248,8 +1332,13 @@ async def notify_user(req: NotifyRequest, request: Request):
 
 @app.get("/api/health")
 async def health_check():
-    """Health check."""
-    return {"status": "healthy", "timestamp": datetime.now(tz=timezone.utc).isoformat()}
+    """Fast liveness check with a non-secret database readiness signal."""
+    ready = is_database_ready()
+    return {
+        "status": "healthy" if ready else "starting",
+        "ready": ready,
+        "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+    }
 
 
 def _is_admin_online_sync() -> bool:

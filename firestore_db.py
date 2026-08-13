@@ -752,18 +752,34 @@ def import_all(dump: dict, overwrite: bool = False) -> dict:
     stats = {'inserted': 0, 'skipped': 0, 'overwritten': 0}
     if not isinstance(dump, dict):
         return stats
+
+    # Prefetch the existing rows once. The previous implementation issued a
+    # SELECT for every document, which made a fresh PostgreSQL restore of the
+    # Telegram snapshot (8,355 documents) slow enough to prevent Render from
+    # detecting the web port while startup was still in progress.
+    collections = [
+        collection for collection, docs in dump.items()
+        if isinstance(docs, dict)
+    ]
     sess = SessionLocal()
     try:
-        for collection, docs in dump.items():
-            if not isinstance(docs, dict):
-                continue
+        existing_by_key = {}
+        if collections:
+            existing_rows = sess.query(FirestoreDocument).filter(
+                FirestoreDocument.collection.in_(collections)
+            ).all()
+            existing_by_key = {
+                (row.collection, row.doc_id): row for row in existing_rows
+            }
+
+        processed = 0
+        for collection in collections:
+            docs = dump[collection]
             for doc_id, data in docs.items():
+                doc_key = (collection, str(doc_id))
                 clean = normalize_doc(data) if isinstance(data, dict) else data
-                existing = sess.query(FirestoreDocument).filter(
-                    FirestoreDocument.collection == collection,
-                    FirestoreDocument.doc_id == str(doc_id),
-                ).first()
                 payload = json.dumps(clean if isinstance(clean, dict) else {})
+                existing = existing_by_key.get(doc_key)
                 if existing:
                     if overwrite:
                         existing.data = payload
@@ -771,12 +787,22 @@ def import_all(dump: dict, overwrite: bool = False) -> dict:
                     else:
                         stats['skipped'] += 1
                 else:
-                    sess.add(FirestoreDocument(
+                    row = FirestoreDocument(
                         collection=collection,
                         doc_id=str(doc_id),
                         data=payload,
-                    ))
+                    )
+                    sess.add(row)
+                    existing_by_key[doc_key] = row
                     stats['inserted'] += 1
+
+                processed += 1
+                if processed % 1000 == 0:
+                    logger.info(
+                        "Restore prepared %s documents (inserted=%s skipped=%s overwritten=%s)",
+                        processed, stats['inserted'], stats['skipped'], stats['overwritten'],
+                    )
+
         sess.commit()
         return stats
     except Exception:
