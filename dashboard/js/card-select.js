@@ -3,6 +3,13 @@ var _originalPlayWallet = 0;
 var _lastPendingSelections = {};
 var _lastToggleTime = 0;
 
+function getSpendablePlayWallet() {
+    var raw = currentUser ? currentUser.play_wallet : 0;
+    if (raw && typeof raw === 'object') raw = raw.value;
+    var value = Number(raw || 0);
+    return isFinite(value) && value >= 0 ? value : 0;
+}
+
 function calcDerash(existingCartelas, mySelections, stake) {
     var totalCartelas = (existingCartelas || 0) + (mySelections || 0);
     if (totalCartelas < 1) return 0;
@@ -27,7 +34,30 @@ var _joinAttemptRoundId = null;
 var _joinedRoundId = null;
 var _roundWaitHandledId = null;
 
-function waitForNextRoundAfterSelection(roundId, stake) {
+async function refreshCurrentUserFromServer() {
+    if (!currentUser || currentUser.id == null) return null;
+    try {
+        if (window.playerApi) {
+            var stateRes = await window.playerApi('POST', '/api/player/reconcile-state');
+            var stateData = await stateRes.json();
+            if (stateRes.ok && stateData.user) {
+                currentUser = { id: currentUser.id, ...stateData.user };
+                updateAllDisplays();
+                return stateData;
+            }
+        }
+        var snap = await db.collection('users').doc(String(currentUser.id)).get();
+        if (snap.exists) {
+            currentUser = { id: currentUser.id, ...snap.data() };
+            updateAllDisplays();
+        }
+    } catch (e) {
+        console.warn('Could not refresh player state:', e);
+    }
+    return null;
+}
+
+async function waitForNextRoundAfterSelection(roundId, stake) {
     if (!roundId || _roundWaitHandledId === roundId) return;
     _roundWaitHandledId = roundId;
     showLoading('Waiting for the next round...');
@@ -69,13 +99,39 @@ async function playNow(stake) {
     _playNowRunning = true;
     _playNowReRun = false;
     if (!currentUser) { showToast('Loading user data...'); _playNowRunning = false; return; }
+    var reconciledState = await refreshCurrentUserFromServer();
     stake = stake || currentStake || 10;
     if (VALID_STAKES.indexOf(stake) === -1) stake = 10;
     currentStake = stake;
-    var pw = currentUser.play_wallet || 0;
+    var pw = getSpendablePlayWallet();
     var hasBalance = pw >= stake;
 
     showLoading('Finding game...');
+    var activeId = (reconciledState && reconciledState.active_round_id) || currentUser.active_round_id;
+    if ((reconciledState && reconciledState.active) || (currentUser.is_playing && activeId)) {
+        try {
+            var activeSnap = await db.collection('rounds').doc(String(activeId)).get();
+            var activeData = activeSnap.exists ? activeSnap.data() : null;
+            var activePlayer = activeData && activeData.players ? activeData.players[String(currentUser.id)] : null;
+            if (activeData && activePlayer && (activeData.status === 'selecting' || activeData.status === 'playing')) {
+                currentRoundId = String(activeId);
+                isSpectator = false;
+                hideLoading();
+                await navigateTo('game');
+                await loadMyCartelas(activeData);
+                listenToRound(currentRoundId);
+                showToast('Resuming your active game');
+                return;
+            }
+            if (reconciledState && reconciledState.active) {
+                hideLoading();
+                showToast('Your previous round is still being finalized. Please wait a moment.');
+                return;
+            }
+        } catch (e) {
+            console.warn('Could not resume active round:', e);
+        }
+    }
     try {
         var roundSnap = await db.collection('rounds')
             .where('status', 'in', ['selecting', 'playing'])
@@ -218,7 +274,7 @@ async function showCardSelection(roundId, roundData) {
     // Socket.IO callback before installing the handler for this round.
     _cleanupCartelaPoolListener();
     selectedCartelas = [];
-    _originalPlayWallet = currentUser.play_wallet || 0;
+    _originalPlayWallet = getSpendablePlayWallet();
     listenerReady = false;
     updateSelectedInfo();
 
@@ -230,8 +286,9 @@ async function showCardSelection(roundId, roundData) {
     var el;
     if (el = document.getElementById('cs-stake')) el.textContent = currentStake + ' ETB';
     if (el = document.getElementById('cs-derash')) el.textContent = estimatedETB + ' ETB';
-    if (el = document.getElementById('cs-main-wallet')) el.textContent = (currentUser.play_wallet || 0) + ' ETB';
-    if (el = document.getElementById('cs-play-wallet')) el.textContent = (currentUser.play_wallet || 0) + ' ETB';
+    var spendableWallet = getSpendablePlayWallet();
+    if (el = document.getElementById('cs-main-wallet')) el.textContent = spendableWallet + ' ETB';
+    if (el = document.getElementById('cs-play-wallet')) el.textContent = spendableWallet + ' ETB';
     if (el = document.getElementById('cs-preview-container')) el.classList.add('hidden');
     if (el = document.getElementById('card-select-screen')) el.classList.remove('hidden');
 
@@ -451,7 +508,7 @@ function toggleCardSelection(num, cell) {
             showToast('Maximum ' + MAX_CARTELAS + ' cartelas!');
             return;
         }
-        var budgetMax = Math.floor((currentUser.play_wallet || 0) / currentStake);
+        var budgetMax = Math.floor(getSpendablePlayWallet() / currentStake);
         if (selectedCartelas.length >= budgetMax) {
             showToast('Not enough balance for more cards!');
             return;
@@ -616,7 +673,7 @@ function updateSelectedInfo() {
 
     // Update PLAY WALLET to show pending deduction
     var pendingCost = count * currentStake;
-    var originalBalance = _originalPlayWallet || (currentUser.play_wallet || 0);
+    var originalBalance = _originalPlayWallet || getSpendablePlayWallet();
     var remaining = originalBalance - pendingCost;
     if (remaining < 0) remaining = 0;
     var pwEl = document.getElementById('cs-play-wallet');

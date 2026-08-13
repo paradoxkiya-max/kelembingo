@@ -392,6 +392,60 @@ class PlayerAuthRequest(BaseModel):
     initData: str
 
 
+@app.post("/api/player/reconcile-state")
+async def reconcile_player_state(request: Request):
+    """Reconcile a player's active-round pointer without changing funds.
+
+    A pointer is cleared only when its round is missing, cancelled, or fully
+    paid/refunded without the player remaining in the round. Valid active and
+    still-settling rounds are preserved so a player cannot double-join.
+    """
+    user_id = _require_player(request)
+
+    def _reconcile():
+        user_ref = db.collection("users").document(str(user_id))
+        user_snap = user_ref.get()
+        if not user_snap.exists:
+            return {"ok": False, "error": "User not found"}
+        user_data = user_snap.to_dict()
+        active_id = user_data.get("active_round_id")
+        if not user_data.get("is_playing") or not active_id:
+            return {"ok": True, "active": False, "user": user_data}
+
+        round_snap = db.collection("rounds").document(str(active_id)).get()
+        round_data = round_snap.to_dict() if round_snap.exists else None
+        player_key = str(user_id)
+        member = bool(round_data and player_key in (round_data.get("players", {}) or {}))
+        status = round_data.get("status") if round_data else None
+        fully_settled = bool(round_data and round_data.get("payout_processed"))
+        clear_stale = (
+            not round_data
+            or status == "cancelled"
+            or (status == "completed" and fully_settled)
+            or not member
+        )
+        if clear_stale:
+            user_ref.update({
+                "is_playing": False,
+                "active_round_id": None,
+                "updated_at": datetime.now(tz=timezone.utc),
+            })
+            user_data["is_playing"] = False
+            user_data["active_round_id"] = None
+            return {"ok": True, "active": False, "cleared": True, "user": user_data}
+
+        return {
+            "ok": True,
+            "active": True,
+            "active_round_id": str(active_id),
+            "round_status": status,
+            "settling": status == "completed" and not fully_settled,
+            "user": user_data,
+        }
+
+    return await asyncio.to_thread(_reconcile)
+
+
 @app.post("/api/player/auth")
 async def player_auth(req: PlayerAuthRequest):
     """Verify Telegram initData and issue a short-lived player token."""
