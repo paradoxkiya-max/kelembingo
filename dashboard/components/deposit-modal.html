@@ -18,15 +18,15 @@
                 </div>
                 <div>
                     <label class="text-xs text-white/50 uppercase mb-1 block">TeleBirr Full Name</label>
-                    <input type="text" id="depositTelebirrName" placeholder="Name on TeleBirr account" class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-bingo-green">
+                    <input type="text" id="depositTelebirrName" placeholder="Name on TeleBirr account" autocomplete="name" class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-bingo-green">
                 </div>
                 <div>
                     <label class="text-xs text-white/50 uppercase mb-1 block">Amount (ETB)</label>
-                    <input type="number" id="depositAmount" placeholder="Enter amount" min="10" class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-bingo-green">
+                    <input type="number" id="depositAmount" placeholder="Enter amount" min="10" step="0.01" inputmode="decimal" autocomplete="off" class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-bingo-green">
                 </div>
                 <div class="flex gap-3 pt-1">
                     <button onclick="hideDepositModal()" class="flex-1 bg-white/10 text-white py-3 rounded-xl font-medium btn-hover">Cancel</button>
-                    <button onclick="continueDepositStep()" class="flex-1 gradient-green py-3 rounded-xl font-medium btn-hover text-white">Next</button>
+                    <button id="deposit-next" type="button" onclick="continueDepositStep()" class="flex-1 gradient-green py-3 rounded-xl font-medium btn-hover text-white">Next</button>
                 </div>
             </div>
 
@@ -42,11 +42,11 @@
                 </div>
                 <div>
                     <label class="text-xs text-white/50 uppercase mb-1 block">Transaction Number</label>
-                    <input type="text" id="depositTransactionId" placeholder="Enter receipt transaction number" class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-bingo-green">
+                    <input type="text" id="depositTransactionId" placeholder="Enter receipt transaction number" autocomplete="off" autocapitalize="characters" class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-bingo-green">
                 </div>
                 <div class="flex gap-3 pt-1">
                     <button onclick="backDepositStep()" class="flex-1 bg-white/10 text-white py-3 rounded-xl font-medium btn-hover">Back</button>
-                    <button onclick="submitDeposit()" class="flex-1 gradient-green py-3 rounded-xl font-medium btn-hover text-white">Submit</button>
+                    <button id="deposit-submit" type="button" onclick="submitDeposit()" class="flex-1 gradient-green py-3 rounded-xl font-medium btn-hover text-white">Submit</button>
                 </div>
             </div>
         </div>

@@ -40,6 +40,11 @@ async def _db(call):
     return await asyncio.to_thread(call)
 
 
+def _read_user_sync(user_id: int):
+    snap = db.collection('users').document(str(user_id)).get()
+    return snap.to_dict() if snap.exists else None
+
+
 ALLOWED_ORIGINS = [
     "*",
     "https://kelembingo-frontend-i8yy.onrender.com",
@@ -1484,6 +1489,26 @@ async def _notify_admin_deposit_web(deposit_data: dict, deposit_id: str):
         logger.warning(f"[NotifyAdminDeposit] Error: {e}")
 
 
+async def _notify_admin_withdrawal_web(withdrawal_data: dict, withdrawal_id: str):
+    try:
+        from config import ADMIN_BOT_TOKEN, ADMIN_CHAT_ID
+        if not ADMIN_BOT_TOKEN or not ADMIN_CHAT_ID:
+            return
+        text = (
+            f"🎰 *New Withdrawal Request*\n\n"
+            f"👤 User: {withdrawal_data.get('firstName', 'Unknown')} (@{withdrawal_data.get('username', '')})\n"
+            f"🆔 ID: `{withdrawal_data.get('userId')}`\n"
+            f"💰 Amount: *{withdrawal_data.get('amount', 0)} ETB*\n"
+            f"📱 Phone: {withdrawal_data.get('phone', '')}\n"
+            f"📛 TeleBirr: {withdrawal_data.get('telebirrName', '')}\n"
+            f"🔗 ID: `{withdrawal_id}`"
+        )
+        bot = Bot(token=ADMIN_BOT_TOKEN)
+        await bot.send_message(chat_id=int(ADMIN_CHAT_ID), text=text, parse_mode='Markdown')
+    except Exception as exc:
+        logger.warning("[NotifyAdminWithdrawal] Error: %s", exc)
+
+
 @app.api_route("/", methods=["GET", "HEAD"])
 async def root_ping():
     return Response(status_code=200)
@@ -1698,12 +1723,15 @@ async def validate_withdrawal(user_id: str, amount: float, request: Request):
             raise HTTPException(status_code=403, detail="Forbidden")
         from handlers.user_manager import UserManager
         um = UserManager(db)
-        result = await um.validate_withdrawal(int(user_id), amount)
+        result = await asyncio.to_thread(
+            lambda: asyncio.run(um.validate_withdrawal(int(user_id), amount))
+        )
         return result
     except HTTPException:
         raise
-    except Exception:
-        return {"ok": True}
+    except Exception as exc:
+        logger.exception("Withdrawal validation failed for user %s: %s", user_id, exc)
+        return {"ok": False, "error": "system_error"}
 
 
 @app.get("/api/deposits/config/{user_id}", response_model=DepositConfigResponse)
@@ -1711,14 +1739,16 @@ async def get_deposit_config(user_id: int, request: Request):
     """Return the live web deposit settings and guardrails used by the Telegram bot flow."""
     if _actor_user_id(request, user_id) != user_id:
         raise HTTPException(status_code=403, detail="Forbidden")
-    user = await user_manager.get_user(user_id)
+    user, pending_count, admin_online, phone = await asyncio.gather(
+        asyncio.to_thread(_read_user_sync, user_id),
+        asyncio.to_thread(_get_pending_deposit_count, user_id),
+        asyncio.to_thread(_is_admin_online_sync),
+        asyncio.to_thread(get_bot_text, 'deposit_phone', db),
+    )
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     pending_limit = 3
-    pending_count = _get_pending_deposit_count(user_id)
-    admin_online = _is_admin_online_sync()
-    phone = get_bot_text('deposit_phone', db)
 
     if pending_count >= pending_limit:
         return DepositConfigResponse(
@@ -1754,16 +1784,19 @@ async def submit_deposit(req: DepositSubmitRequest, request: Request):
     """Submit a pending deposit request using the same core rules as the Telegram bot flow.
     The user is verified from the player token, never trusted from the body."""
     user_id = _require_player(request)
-    user = await user_manager.get_user(user_id)
+    user, pending_count, admin_online = await asyncio.gather(
+        asyncio.to_thread(_read_user_sync, user_id),
+        asyncio.to_thread(_get_pending_deposit_count, user_id),
+        asyncio.to_thread(_is_admin_online_sync),
+    )
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     pending_limit = 3
-    pending_count = _get_pending_deposit_count(user_id)
     if pending_count >= pending_limit:
         raise HTTPException(status_code=400, detail=get_bot_text('deposit_too_many', db))
 
-    if not _is_admin_online_sync():
+    if not admin_online:
         raise HTTPException(status_code=400, detail=get_bot_text('deposit_admin_offline', db))
 
     telebirr_name = (req.telebirr_name or '').strip()
@@ -1802,7 +1835,7 @@ async def submit_deposit(req: DepositSubmitRequest, request: Request):
         raise HTTPException(status_code=400, detail=result.get("error", "Deposit creation failed"))
     deposit_id = result["deposit_id"]
 
-    await _notify_admin_deposit_web(deposit_data, deposit_id)
+    asyncio.create_task(_notify_admin_deposit_web(deposit_data, deposit_id))
 
     return {
         "ok": True,
@@ -1830,7 +1863,7 @@ class WithdrawalCreateRequest(BaseModel):
 async def create_withdrawal(req: WithdrawalCreateRequest, request: Request):
     """Create a pending withdrawal through the authoritative idempotent creator."""
     user_id = _require_player(request)
-    user = await user_manager.get_user(user_id)
+    user = await asyncio.to_thread(_read_user_sync, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -1841,7 +1874,9 @@ async def create_withdrawal(req: WithdrawalCreateRequest, request: Request):
     if not math.isfinite(amount) or amount <= 0:
         raise HTTPException(status_code=400, detail="invalid_amount")
 
-    validation = await user_manager.validate_withdrawal(user_id, amount)
+    validation = await asyncio.to_thread(
+        lambda: asyncio.run(user_manager.validate_withdrawal(user_id, amount))
+    )
     if not validation.get('ok'):
         return {"ok": False, **validation}
 
@@ -1877,22 +1912,7 @@ async def create_withdrawal(req: WithdrawalCreateRequest, request: Request):
     await broadcast_event('users', user_id_str)
     await broadcast_event('withdrawals', result['withdrawal_id'])
 
-    try:
-        from config import ADMIN_BOT_TOKEN, ADMIN_CHAT_ID
-        if ADMIN_BOT_TOKEN and ADMIN_CHAT_ID:
-            text = (
-                f"🎰 *New Withdrawal Request*\n\n"
-                f"👤 User: {withdrawal_data['firstName']} (@{withdrawal_data['username']})\n"
-                f"🆔 ID: `{user_id}`\n"
-                f"💰 Amount: *{amount} ETB*\n"
-                f"📱 Phone: {phone}\n"
-                f"📛 TeleBirr: {telebirr_name}\n"
-                f"🔗 ID: `{result['withdrawal_id']}`"
-            )
-            bot = Bot(token=ADMIN_BOT_TOKEN)
-            await bot.send_message(chat_id=int(ADMIN_CHAT_ID), text=text, parse_mode='Markdown')
-    except Exception:
-        pass
+    asyncio.create_task(_notify_admin_withdrawal_web(withdrawal_data, result['withdrawal_id']))
 
     return result
 
