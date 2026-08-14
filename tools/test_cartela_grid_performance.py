@@ -1,22 +1,14 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-card_select = (ROOT / 'dashboard/js/card-select.js').read_text()
-game_html = (ROOT / 'dashboard/game.html').read_text()
-game_css = (ROOT / 'dashboard/css/game.css').read_text()
-components_css = (ROOT / 'dashboard/css/components.css').read_text()
+card_select = (ROOT / 'dashboard-react/client/src/pages/CartelaSelect.tsx').read_text()
+game_css = (ROOT / 'dashboard-react/client/src/index.css').read_text()
 
-assert 'document.createDocumentFragment()' in card_select
-assert 'grid.replaceChildren(fragment)' in card_select
-assert 'grid.addEventListener(\'click\', _gridClickHandler' in card_select
-assert '_cardCellByNumber' in card_select
-assert '_lastSelectionRealtimeKey' in card_select
-assert 'grid.querySelectorAll(\'.card-tile\')' not in card_select
-assert "css/game.css?v=grid-1" in game_html
-assert "css/components.css?v=grid-1" in game_html
-assert "js/card-select.js?v=grid-1" in game_html
-assert 'contain: layout style' in game_css
-assert 'touch-action: pan-y' in game_css
-assert 'transition: transform 0.15s ease' in components_css
+assert 'visibleCartelas.map' in card_select
+assert 'grid-cols-7' in card_select and 'grid-cols-8' in card_select
+assert '[contain:layout_style]' in card_select
+assert 'aria-label={`Cartela' in card_select
+assert 'active:scale-[0.92]' in card_select
+assert 'overflow-y-auto' in card_select
 
 print('cartela grid performance regression check: PASS')

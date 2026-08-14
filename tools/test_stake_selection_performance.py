@@ -1,23 +1,20 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-page_loader = (ROOT / 'dashboard/js/page-loader.js').read_text()
-auth = (ROOT / 'dashboard/js/auth.js').read_text()
-card_select = (ROOT / 'dashboard/js/card-select.js').read_text()
+app = (ROOT / 'dashboard-react/client/src/App.tsx').read_text()
+home = (ROOT / 'dashboard-react/client/src/pages/Home.tsx').read_text()
+player_context = (ROOT / 'dashboard-react/client/src/contexts/PlayerContext.tsx').read_text()
+gateway = (ROOT / 'dashboard-react/client/src/lib/gateway.ts').read_text()
+card_select = (ROOT / 'dashboard-react/client/src/pages/CartelaSelect.tsx').read_text()
 admin_api = (ROOT / 'api/admin_api.py').read_text()
-game_html = (ROOT / 'dashboard/game.html').read_text()
-
-assert "const PAGE_ASSET_VERSION = 'derash-1'" in page_loader
-assert "const deferredMap" in page_loader
-assert "this.inflight[cacheKey]" in page_loader
-assert "await PageLoader.loadComponent('card-select-screen', 'card-select.html')" in card_select
-assert "'/api/public/stats'" in auth
-assert "setInterval(refreshCompletedStats, 30000)" in auth
-assert "db.collection('rounds').where('status', '==', 'completed').get()" not in auth
-assert "@app.get(\"/api/public/stats\")" in admin_api
+assert 'lazy(() => import("@/pages/CartelaSelect"))' in app
+assert 'playerApi.cartelas' in card_select
+assert 'playerApi.activeRounds' in card_select
+assert 'playerApi.stats()' in player_context
+assert 'setInterval(() => void playerApi.stats().then(setStats).catch(() => undefined), 30000)' in player_context
+assert '"/api/public/stats"' in gateway
+assert 'Promise.all' in card_select
+assert '@app.get("/api/public/stats")' in admin_api
 assert "jsonb_extract_path_text(CAST(data AS JSONB), 'status')" in admin_api
-assert 'js/auth.js?v=stake-1' in game_html
-assert 'js/card-select.js?v=grid-1' in game_html
-assert 'js/page-loader.js?v=derash-1' in game_html
 
 print('stake-selection performance regression check: PASS')
