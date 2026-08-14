@@ -1,8 +1,13 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import os
 import sys
+import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+os.environ["DATABASE_URL"] = (
+    f"sqlite:///{Path(tempfile.gettempdir()) / 'kelembingo-timer-regression.sqlite3'}"
+)
 
 from game.round_engine import _grid_next_number_at
 from settlement import _next_number_at

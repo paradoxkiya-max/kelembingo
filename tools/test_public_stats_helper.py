@@ -1,8 +1,11 @@
 import sys
+import os
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ["DATABASE_URL"] = f"sqlite:///{Path(tempfile.gettempdir()) / 'kelembingo-public-stats.sqlite3'}"
 
 from api.admin_api import _public_stats_sync
 

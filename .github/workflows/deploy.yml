@@ -46,6 +46,8 @@ jobs:
         run: python tools/test_database_config_guard.py
       - name: Verify realtime and single-winner hardening
         run: python tools/test_realtime_winner_hardening.py
+      - name: Verify round-engine lifecycle invariants
+        run: python tools/test_round_engine_lifecycle.py
       - name: Verify stake-selection performance path
         run: python tools/test_stake_selection_performance.py && python tools/test_public_stats_helper.py
       - name: Verify payment UI hardening
