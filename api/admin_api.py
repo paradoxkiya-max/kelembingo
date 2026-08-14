@@ -18,13 +18,14 @@ import json
 import datetime
 import urllib.parse
 from config import db, BOT_TOKEN
-from firestore_db import MockFirestoreClient, SessionLocal, SystemEvent, FieldFilter, Increment, ArrayUnion
+from firestore_db import MockFirestoreClient, SessionLocal, SystemEvent, FieldFilter, Increment, ArrayUnion, engine as db_engine
 from startup_state import is_database_ready
 
 from game.round_engine import RoundEngine, DEFAULT_STAKE, VALID_STAKES, SELECTION_DURATION, GAME_LENGTH_RANGE, _parse_dt, _grid_next_number_at
 from handlers.user_manager import UserManager
 from handlers.bot_content import get_bot_text
 from datetime import datetime, date, timedelta, timezone
+from sqlalchemy import text as sql_text
 from telegram import Bot
 # Firebase replaced by SQLAlchemy emulator (firestore_db.py)
 
@@ -1340,6 +1341,83 @@ async def notify_user(req: NotifyRequest, request: Request):
         return {"status": "success"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+_PUBLIC_STATS_CACHE = None
+_PUBLIC_STATS_CACHE_EXPIRES = 0.0
+
+
+def _public_stats_sync():
+    """Return small public aggregates without materializing every round document."""
+    global _PUBLIC_STATS_CACHE, _PUBLIC_STATS_CACHE_EXPIRES
+    now_mono = time.monotonic()
+    if _PUBLIC_STATS_CACHE is not None and now_mono < _PUBLIC_STATS_CACHE_EXPIRES:
+        return dict(_PUBLIC_STATS_CACHE)
+    today_iso = datetime.now(tz=timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ).isoformat()
+    if db_engine.dialect.name == 'postgresql':
+        statement = sql_text("""
+            SELECT
+                COALESCE(SUM(CASE
+                    WHEN jsonb_extract_path_text(CAST(data AS JSONB), 'status') IN ('selecting', 'playing')
+                    THEN COALESCE(NULLIF(jsonb_extract_path_text(CAST(data AS JSONB), 'player_count'), '')::BIGINT, 0)
+                    ELSE 0
+                END), 0) AS active_cartelas,
+                COALESCE(SUM(CASE
+                    WHEN jsonb_extract_path_text(CAST(data AS JSONB), 'status') = 'completed'
+                     AND COALESCE(NULLIF(jsonb_extract_path_text(CAST(data AS JSONB), 'player_count'), '')::BIGINT, 0) > 0
+                    THEN 1 ELSE 0
+                END), 0) AS games_played,
+                COALESCE(SUM(CASE
+                    WHEN jsonb_extract_path_text(CAST(data AS JSONB), 'status') = 'completed'
+                     AND jsonb_extract_path_text(CAST(data AS JSONB), 'completed_at') >= :today_iso
+                    THEN CASE
+                        WHEN jsonb_typeof(CAST(data AS JSONB)->'winners') = 'array'
+                        THEN jsonb_array_length(CAST(data AS JSONB)->'winners')
+                        ELSE 0
+                    END
+                    ELSE 0
+                END), 0) AS winners_today
+            FROM firestore_documents
+            WHERE collection = 'rounds'
+        """)
+        with SessionLocal() as session:
+            row = session.execute(statement, {'today_iso': today_iso}).mappings().one()
+            _PUBLIC_STATS_CACHE = {
+                'active_cartelas': int(row['active_cartelas'] or 0),
+                'games_played': int(row['games_played'] or 0),
+                'winners_today': int(row['winners_today'] or 0),
+            }
+            _PUBLIC_STATS_CACHE_EXPIRES = now_mono + 5.0
+            return dict(_PUBLIC_STATS_CACHE)
+
+    # Local SQLite fallback for development/tests only.
+    active_cartelas = games_played = winners_today = 0
+    today = datetime.now(tz=timezone.utc).date()
+    for doc in db.collection('rounds').get():
+        data = doc.to_dict() or {}
+        status = data.get('status')
+        if status in ('selecting', 'playing'):
+            active_cartelas += int(data.get('player_count') or 0)
+        elif status == 'completed' and int(data.get('player_count') or 0) > 0:
+            games_played += 1
+            completed_at = _parse_dt(data.get('completed_at'))
+            if completed_at and completed_at.date() == today:
+                winners_today += len(data.get('winners') or [])
+    _PUBLIC_STATS_CACHE = {
+        'active_cartelas': active_cartelas,
+        'games_played': games_played,
+        'winners_today': winners_today,
+    }
+    _PUBLIC_STATS_CACHE_EXPIRES = now_mono + 5.0
+    return dict(_PUBLIC_STATS_CACHE)
+
+
+@app.get("/api/public/stats")
+async def public_stats():
+    """Fast, non-sensitive home-screen statistics."""
+    return await asyncio.to_thread(_public_stats_sync)
 
 
 @app.get("/api/health")

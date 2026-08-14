@@ -121,6 +121,7 @@ async function playNow(stake) {
     _playNowRunning = true;
     _playNowReRun = false;
     if (!currentUser) { showToast('Loading user data...'); _playNowRunning = false; return; }
+    showLoading('Finding game...');
     var reconciledState = await refreshCurrentUserFromServer();
     stake = stake || currentStake || 10;
     if (VALID_STAKES.indexOf(stake) === -1) stake = 10;
@@ -128,7 +129,6 @@ async function playNow(stake) {
     var pw = getSpendablePlayWallet();
     var hasBalance = pw >= stake;
 
-    showLoading('Finding game...');
     var activeId = (reconciledState && reconciledState.active_round_id) || currentUser.active_round_id;
     if ((reconciledState && reconciledState.active) || (currentUser.is_playing && activeId)) {
         try {
@@ -292,6 +292,9 @@ async function playNow(stake) {
 
 // ==================== CARD SELECTION ====================
 async function showCardSelection(roundId, roundData) {
+    if (!document.getElementById('card-select-grid') && window.PageLoader) {
+        await PageLoader.loadComponent('card-select-screen', 'card-select.html');
+    }
     // A new round can reuse the same browser tab. Remove the previous fast
     // Socket.IO callback before installing the handler for this round.
     _cleanupCartelaPoolListener();
