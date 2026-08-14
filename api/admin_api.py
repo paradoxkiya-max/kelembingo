@@ -1077,9 +1077,9 @@ async def get_cartela(number: int):
 # Round Management
 # ═══════════════════════════════════════════════════════════════
 @app.get("/api/rounds/active")
-async def get_active_round():
-    """Get the current active round."""
-    round_data = await engine.get_active_round()
+async def get_active_round(stake: int = FastAPIQuery(default=DEFAULT_STAKE)):
+    """Get the current active round for the requested stake."""
+    round_data = await engine.get_active_round(stake=stake)
     if not round_data:
         return {"round": None}
     return {"round": round_data}

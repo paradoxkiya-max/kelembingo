@@ -282,7 +282,7 @@ def join_round(
         round_data = round_doc.to_dict()
         status = round_data.get("status")
         called = round_data.get("called_numbers", []) or []
-        if status != "selecting" and not (status == "playing" and len(called) == 0):
+        if status != "selecting":
             return {"error": "Round is no longer accepting players"}
 
         players = round_data.get("players", {}) or {}
@@ -402,6 +402,12 @@ def refund_no_winner(db, round_id, players=None, stake=0, idempotency_key=None):
                 "refunded": False,
                 "amount": 0.0,
             }
+        if round_data.get("status") == "completed" and round_data.get("winners"):
+            return {
+                "ok": False,
+                "error": "winner_round_requires_payout",
+                "round_id": round_id,
+            }
         authoritative_players = round_data.get("players") or requested_players
         try:
             round_stake = float(round_data.get("stake", fallback_stake) or 0)
@@ -425,6 +431,7 @@ def refund_no_winner(db, round_id, players=None, stake=0, idempotency_key=None):
             active_round = user_data.get("active_round_id")
             update = {
                 "play_wallet": float(user_data.get("play_wallet", 0) or 0) + refund,
+                "total_games": int(user_data.get("total_games", 0) or 0) + 1,
                 "losses": int(user_data.get("losses", 0) or 0) + 1,
                 "updated_at": now,
             }

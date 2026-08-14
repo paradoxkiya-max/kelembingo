@@ -15,7 +15,8 @@ export default function CartelaSelect() {
   const [, navigate] = useLocation();
   const search = useSearch();
   const { player } = usePlayer();
-  const [stake, setStake] = useState(10);
+  const requestedStake = Number(new URLSearchParams(search).get("stake"));
+  const stake = STAKES.includes(requestedStake) ? requestedStake : 10;
   const [round, setRound] = useState<Round | null>(null);
   const [cartelas, setCartelas] = useState<Cartela[]>([]);
   const [taken, setTaken] = useState<Set<number>>(new Set());
@@ -29,13 +30,8 @@ export default function CartelaSelect() {
   const poolEstimate = Math.round(((round?.player_count || 0) + selected.length) * stake * 0.75 * 10) / 10;
 
   useEffect(() => {
-    const requestedStake = Number(new URLSearchParams(search).get("stake"));
-    if (STAKES.includes(requestedStake)) setStake(requestedStake);
-  }, [search]);
-
-  useEffect(() => {
     let active = true;
-    Promise.all([playerApi.cartelas(), playerApi.activeRounds()]).then(([cards, activeResponse]) => {
+    Promise.all([playerApi.cartelas(), playerApi.activeRounds(stake)]).then(([cards, activeResponse]) => {
       if (!active) return;
       const nextRound = activeResponse.round || null;
       setCartelas(cards.cartelas || []);
@@ -45,7 +41,7 @@ export default function CartelaSelect() {
       if (deadline) setSeconds(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)));
     }).catch((e) => active && setError(e instanceof Error ? e.message : "Unable to load cartelas")).finally(() => active && setLoading(false));
     return () => { active = false; };
-  }, []);
+  }, [stake]);
 
   useEffect(() => {
     if (seconds <= 0) {

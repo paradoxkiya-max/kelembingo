@@ -45,7 +45,7 @@ export const playerApi = {
   stats: () => gatewayFetch<PublicStats>("/api/public/stats"),
   time: () => gatewayFetch<{ iso: string }>("/api/time"),
   history: () => gatewayFetch<{ rounds?: Round[]; count?: number }>("/api/rounds?status=completed&winners_only=true&limit=3"),
-  activeRounds: () => gatewayFetch<{ round: Round | null }>("/api/rounds/active"),
+  activeRounds: (stake: number = 10) => gatewayFetch<{ round: Round | null }>(`/api/rounds/active?stake=${stake}`),
   round: (roundId: string) => gatewayFetch<{ round: Round }>(`/api/rounds/${encodeURIComponent(roundId)}`),
   cartela: (number: number) => gatewayFetch<{ cartela: Cartela }>(`/api/cartelas/${number}`),
   cartelas: () => gatewayFetch<{ cartelas: Cartela[]; count: number }>("/api/cartelas"),

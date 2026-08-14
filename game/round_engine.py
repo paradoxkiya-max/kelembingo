@@ -8,6 +8,7 @@ and prize distribution.
 import random
 import asyncio
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Tuple
 from firestore_db import (
@@ -173,31 +174,50 @@ class RoundEngine:
         """Create a new round in 'selecting' state."""
         if stake not in VALID_STAKES:
             stake = DEFAULT_STAKE
-        # Check for existing active round with same stake
-        active = await self.get_active_round(stake=stake)
-        if active:
-            return active
 
-        now = datetime.now(tz=timezone.utc)
-        game_target = self.normalize_game_target()
-        round_data = {
-            'status': 'selecting',
-            'stake': stake,
-            'players': {},
-            'player_count': 0,
-            'taken_cartelas': [],
-            'called_numbers': [],
-            'winners': [],
-            'prize_per_winner': 0,
-            'admin_profit': 0,
-            'game_target': game_target,
-            'selection_deadline': now + timedelta(seconds=SELECTION_DURATION),
-            'created_at': now,
-            'completed_at': None,
-        }
-        doc_ref = self.rounds_ref.document()
-        doc_ref.set(round_data)
-        return {'id': doc_ref.id, **round_data}
+        def _apply(transaction):
+            # The account lock makes the active-round check and creation one
+            # cross-process critical section. A read-then-write check here can
+            # otherwise create two same-stake rounds under simultaneous joins.
+            active_query = (self.rounds_ref
+                            .where('status', 'in', ['selecting', 'playing'])
+                            .where('stake', '==', stake)
+                            .order_by('created_at', 'DESCENDING')
+                            .limit(1))
+            active_docs = list(transaction.query(active_query).get())
+            if active_docs:
+                doc = active_docs[0]
+                return {'id': doc.id, **doc.to_dict()}
+
+            now = datetime.now(tz=timezone.utc)
+            game_target = self.normalize_game_target()
+            round_data = {
+                'status': 'selecting',
+                'stake': stake,
+                'players': {},
+                'player_count': 0,
+                'taken_cartelas': [],
+                'called_numbers': [],
+                'winners': [],
+                'prize_per_winner': 0,
+                'admin_profit': 0,
+                'game_target': game_target,
+                'selection_deadline': now + timedelta(seconds=SELECTION_DURATION),
+                'created_at': now,
+                'completed_at': None,
+            }
+            doc_ref = self.rounds_ref.document()
+            transaction.set(doc_ref, round_data)
+            return {'id': doc_ref.id, **round_data}
+
+        return await asyncio.to_thread(
+            lambda: run_idempotent(
+                f'round-create:{stake}:{uuid.uuid4().hex}',
+                'round_create',
+                _apply,
+                lock_key=f'active-round:{stake}',
+            )
+        )
 
     def join_round_sync(self, round_id: str, user_id: int, 
                         cartela_numbers: List[int], user_name: str) -> dict:
@@ -755,7 +775,9 @@ class RoundEngine:
         through ``complete_round`` so a manual or stale caller cannot bypass
         called-number validation.
         """
-        if len({str(w) for w in (winner_ids or [])}) != 1:
+        if not winner_ids:
+            return {'error': 'A validated winner is required; use refund_no_winner for no-winner rounds'}
+        if len({str(w) for w in winner_ids}) != 1:
             return {'error': 'Exactly one winner is required'}
         if winner_ids:
             completion = await self.complete_round(
@@ -785,7 +807,13 @@ class RoundEngine:
 
             data = round_doc.to_dict()
             if data.get('payout_processed'):
-                return {'error': 'Round already paid out'}
+                return {
+                    'status': 'completed',
+                    'winners': [int(w) for w in (data.get('winners') or [])],
+                    'prize_per_winner': data.get('prize_per_winner', 0),
+                    'admin_profit': data.get('admin_profit', 0),
+                    'already_processed': True,
+                }
             if data.get('status') not in ('playing', 'completed'):
                 return {'error': 'Round not in a valid state for ending'}
 
@@ -826,6 +854,7 @@ class RoundEngine:
                     user_data = user_doc.to_dict()
                     _finish_user(user_ref, user_data, {
                         'play_wallet': user_data.get('play_wallet', 0) + prize_per_winner,
+                        'total_games': int(user_data.get('total_games', 0) or 0) + 1,
                         'wins': user_data.get('wins', 0) + 1,
                     })
 
@@ -840,6 +869,7 @@ class RoundEngine:
                     if user_doc.exists:
                         user_data = user_doc.to_dict()
                         _finish_user(user_ref, user_data, {
+                            'total_games': int(user_data.get('total_games', 0) or 0) + 1,
                             'losses': user_data.get('losses', 0) + 1,
                         })
 

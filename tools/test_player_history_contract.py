@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import sys
 
-os.environ.setdefault("DATABASE_URL", f"sqlite:///{Path('/tmp/kelembingo-player-history-contract.db')}")
+os.environ["DATABASE_URL"] = f"sqlite:///{Path('/tmp/kelembingo-player-history-contract.db')}"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from api import admin_api
