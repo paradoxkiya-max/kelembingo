@@ -62,5 +62,7 @@ jobs:
         run: python tools/test_two_card_audio_contract.py
       - name: Verify player flow hardening contract
         run: python tools/test_player_flow_hardening.py
+      - name: Verify selection expiry handoff and in-app popup contract
+        run: python tools/test_selection_expiry_handoff.py
       - name: Type-check and build React frontend
         run: pnpm --dir dashboard-react check && pnpm --dir dashboard-react build
