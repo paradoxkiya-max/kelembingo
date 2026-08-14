@@ -93,8 +93,11 @@ async function initUser() {
     }
 }
 
-function showRegistration() {
+async function showRegistration() {
     if (!currentUser) return;
+    if (!document.getElementById('regName') && window.PageLoader) {
+        await PageLoader.loadComponent('registerModal', 'register-modal.html');
+    }
     var rn = document.getElementById('regName');
     var rp = document.getElementById('regPhone');
     var rm = document.getElementById('registerModal');
@@ -151,27 +154,19 @@ function startStatsListener() {
         if (sp) sp.textContent = totalCartelas;
     });
     function refreshCompletedStats() {
-        var today = new Date(); today.setHours(0, 0, 0, 0);
-        db.collection('rounds').where('status', '==', 'completed').get().then(function(snap) {
-            var count = 0;
-            var winners = 0;
-            snap.forEach(function(doc) {
-                var d = doc.data();
-                if ((d.player_count || 0) > 0) count++;
-                if (d.winners && d.winners.length > 0) {
-                    var ca = d.completed_at;
-                    if (ca) {
-                        var dt = ca.toDate ? ca.toDate() : new Date(ca);
-                        if (dt >= today) winners += d.winners.length;
-                    }
-                }
-            });
-            var sg = document.getElementById('stat-games');
-            if (sg) sg.textContent = count;
-            var sw = document.getElementById('stat-winners');
-            if (sw) sw.textContent = winners;
-        }).catch(function() {});
+        var apiBase = window.BACKEND_URL || window.API_BASE || window.location.origin || (window.location.protocol + '//' + window.location.host);
+        fetch(apiBase + '/api/public/stats', { cache: 'no-store' })
+            .then(function(res) { if (!res.ok) throw new Error('stats ' + res.status); return res.json(); })
+            .then(function(data) {
+                var sg = document.getElementById('stat-games');
+                if (sg) sg.textContent = data.games_played || 0;
+                var sw = document.getElementById('stat-winners');
+                if (sw) sw.textContent = data.winners_today || 0;
+                var sp = document.getElementById('stat-players');
+                if (sp) sp.textContent = data.active_cartelas || 0;
+            })
+            .catch(function() {});
     }
     refreshCompletedStats();
-    statsInterval = setInterval(refreshCompletedStats, 10000);
+    statsInterval = setInterval(refreshCompletedStats, 30000);
 }

@@ -1,10 +1,11 @@
 // Page Loader System for Kelem Bingo
 // Dynamically loads HTML pages and components into the shell game.html
 
-const PAGE_ASSET_VERSION = 'rtw-1';
+const PAGE_ASSET_VERSION = 'stake-1';
 
 const PageLoader = {
     cache: {},
+    inflight: {},
     componentsLoaded: false,
     
     // Map screen names to page file names
@@ -56,42 +57,60 @@ const PageLoader = {
             target.innerHTML = this.cache[cacheKey];
             return;
         }
+        if (this.inflight[cacheKey]) return this.inflight[cacheKey];
         
-        try {
-            const response = await fetch(`components/${componentPath}?v=${PAGE_ASSET_VERSION}`);
-            if (!response.ok) throw new Error(`Failed to load ${componentPath}`);
-            const html = await response.text();
-            this.cache[cacheKey] = html;
-            target.innerHTML = html;
-        } catch (err) {
-            console.error(`PageLoader: Error loading component ${componentPath}:`, err);
-        }
+        const self = this;
+        const request = fetch(`components/${componentPath}?v=${PAGE_ASSET_VERSION}`)
+            .then(function(response) {
+                if (!response.ok) throw new Error(`Failed to load ${componentPath}`);
+                return response.text();
+            })
+            .then(function(html) {
+                self.cache[cacheKey] = html;
+                target.innerHTML = html;
+            })
+            .catch(function(err) {
+                console.error(`PageLoader: Error loading ${componentPath}:`, err);
+            })
+            .then(function(result) {
+                delete self.inflight[cacheKey];
+                return result;
+            });
+        this.inflight[cacheKey] = request;
+        return request;
     },
     
     // Load all shared components (header, nav, modals)
     async initComponents() {
         if (this.componentsLoaded) return;
         
-        const componentMap = {
+        // Only the visible shell is critical before stake selection. Hidden
+        // modals and the card picker are fetched in the background below.
+        const essentialMap = {
             'telegram-header': 'header.html',
             'bottom-nav': 'bottom-nav.html',
+            'loading-overlay': 'loading-overlay.html',
+            'toast': 'toast.html'
+        };
+        const deferredMap = {
             'win-modal': 'win-modal.html',
             'rules-modal': 'rules-modal.html',
             'transfer-modal': 'transfer-modal.html',
             'depositModal': 'deposit-modal.html',
             'withdrawModal': 'withdraw-modal.html',
             'registerModal': 'register-modal.html',
-            'card-select-screen': 'card-select.html',
-            'loading-overlay': 'loading-overlay.html',
-            'toast': 'toast.html'
+            'card-select-screen': 'card-select.html'
         };
         
-        const promises = Object.entries(componentMap).map(([id, path]) => 
+        await Promise.all(Object.entries(essentialMap).map(([id, path]) =>
             this.loadComponent(id, path)
-        );
-        
-        await Promise.all(promises);
+        ));
         this.componentsLoaded = true;
+        // Do not block the home screen or auth on hidden UI. `loadComponent`
+        // is shared/in-flight safe for a user who taps before this finishes.
+        Object.entries(deferredMap).forEach(([id, path]) => {
+            this.loadComponent(id, path);
+        });
     },
     
     // Dispatch custom event after page load
