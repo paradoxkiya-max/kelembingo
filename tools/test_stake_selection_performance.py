@@ -17,7 +17,7 @@ assert "db.collection('rounds').where('status', '==', 'completed').get()" not in
 assert "@app.get(\"/api/public/stats\")" in admin_api
 assert "jsonb_extract_path_text(CAST(data AS JSONB), 'status')" in admin_api
 assert 'js/auth.js?v=stake-1' in game_html
-assert 'js/card-select.js?v=stake-1' in game_html
+assert 'js/card-select.js?v=grid-1' in game_html
 assert 'js/page-loader.js?v=pay-1' in game_html
 
 print('stake-selection performance regression check: PASS')
