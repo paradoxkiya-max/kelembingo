@@ -62,7 +62,7 @@ services:
       - key: GATEWAY_URL
         value: https://kelembingo-sqnv.onrender.com
       - key: WEBAPP_URL
-        value: https://kelembingo-frontend-i8yy.onrender.com/game
+        value: https://kelembingo-frontend-i8yy.onrender.com/
       - key: INTERNAL_API_KEY
         value: your_internal_api_key_here
       - key: BOT_TOKEN
