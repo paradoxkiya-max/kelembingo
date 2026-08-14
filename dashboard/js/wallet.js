@@ -4,6 +4,32 @@ var _depositConfig = {
     pending_count: 0,
     pending_limit: 3
 };
+var _depositConfigInFlight = null;
+var _depositSubmitInFlight = false;
+var _withdrawSubmitInFlight = false;
+var _withdrawalRequestKey = null;
+
+function _clientIdempotencyKey(prefix) {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        return prefix + ':' + window.crypto.randomUUID();
+    }
+    return prefix + ':' + Date.now() + ':' + Math.random().toString(36).slice(2);
+}
+
+function _setWalletButtonBusy(id, busy, busyLabel) {
+    var button = document.getElementById(id);
+    if (!button) return;
+    if (busy) {
+        if (!button.dataset.defaultLabel) button.dataset.defaultLabel = button.textContent;
+        button.disabled = true;
+        button.textContent = busyLabel;
+        button.style.opacity = '0.65';
+    } else {
+        button.disabled = false;
+        button.textContent = button.dataset.defaultLabel || button.textContent;
+        button.style.opacity = '';
+    }
+}
 
 function openDepositBot() {
     requestDeposit();
@@ -33,6 +59,11 @@ function hideDepositModal() {
 
 async function requestDeposit() {
     if (!currentUser) { showToast('Loading user data...'); return; }
+    if (!document.getElementById('depositPendingCount') && window.PageLoader) {
+        await PageLoader.loadComponent('depositModal', 'deposit-modal.html');
+    }
+    if (_depositConfigInFlight) return _depositConfigInFlight;
+    _depositConfigInFlight = (async function() {
     showLoading('Preparing deposit...');
     try {
         var apiBase = window.BACKEND_URL || window.API_BASE || window.location.origin || (window.location.protocol + '//' + window.location.host);
@@ -72,7 +103,10 @@ async function requestDeposit() {
         showToast('Error: ' + err.message);
     } finally {
         hideLoading();
+        _depositConfigInFlight = null;
     }
+    })();
+    return _depositConfigInFlight;
 }
 
 function continueDepositStep() {
@@ -93,6 +127,7 @@ function backDepositStep() {
 }
 
 async function submitDeposit() {
+    if (_depositSubmitInFlight) return;
     var name = document.getElementById('depositTelebirrName').value.trim();
     var amount = parseFloat(document.getElementById('depositAmount').value);
     var transactionId = document.getElementById('depositTransactionId').value.trim();
@@ -101,6 +136,8 @@ async function submitDeposit() {
     if (!amount || amount < 10) { showToast('Minimum deposit is 10 ETB'); return; }
     if (!transactionId || transactionId.length < 3) { showToast('Enter a valid transaction number'); return; }
 
+    _depositSubmitInFlight = true;
+    _setWalletButtonBusy('deposit-submit', true, 'Submitting...');
     showLoading('Submitting deposit...');
     try {
         var apiBase = window.BACKEND_URL || window.API_BASE || window.location.origin || (window.location.protocol + '//' + window.location.host);
@@ -130,99 +167,122 @@ async function submitDeposit() {
         }
 
         hideDepositModal();
+        _txnCache = null;
+        _txnCacheAt = 0;
         showToast('Deposit request submitted!');
         if (typeof loadWalletTransactions === 'function') loadWalletTransactions();
     } catch (err) {
         showToast('Error: ' + err.message);
     } finally {
         hideLoading();
+        _setWalletButtonBusy('deposit-submit', false);
+        _depositSubmitInFlight = false;
     }
 }
 
-function requestWithdrawal() {
-    const bal = currentUser ? currentUser.play_wallet || 0 : 0;
+async function requestWithdrawal() {
+    if (!currentUser) { showToast('Loading user data...'); return; }
+    if (!document.getElementById('withdrawAmount') && window.PageLoader) {
+        await PageLoader.loadComponent('withdrawModal', 'withdraw-modal.html');
+    }
+    const bal = currentUser.play_wallet || 0;
     document.getElementById('withdraw-available').textContent = bal + ' ETB';
+    var phoneEl = document.getElementById('withdrawTelebirr');
+    var nameEl = document.getElementById('withdrawTelebirrName');
+    if (phoneEl && !phoneEl.value) phoneEl.value = currentUser.phone || '';
+    if (nameEl && !nameEl.value) nameEl.value = currentUser.telebirr_name || currentUser.first_name || '';
+    _withdrawalRequestKey = null;
     document.getElementById('withdrawModal').classList.remove('hidden');
 }
 
 async function submitWithdrawal() {
-    const amount = parseInt(document.getElementById('withdrawAmount').value);
+    if (_withdrawSubmitInFlight) return;
+    const amount = parseFloat(document.getElementById('withdrawAmount').value);
     const phone = document.getElementById('withdrawTelebirr').value.trim();
     const name = document.getElementById('withdrawTelebirrName').value.trim();
     if (!amount || amount < 50) { showToast('Minimum withdrawal: 50 ETB'); return; }
     if (!phone) { showToast('Enter phone number'); return; }
+    if (!name) { showToast('Enter your TeleBirr full name'); return; }
+    _withdrawSubmitInFlight = true;
+    _withdrawalRequestKey = _withdrawalRequestKey || _clientIdempotencyKey('withdrawal');
+    _setWalletButtonBusy('withdraw-submit', true, 'Submitting...');
+    showLoading('Submitting withdrawal...');
     try {
         const apiBase = window.BACKEND_URL || window.API_BASE || window.location.origin || (window.location.protocol + '//' + window.location.host);
-        const valRes = window.playerApi
-            ? await window.playerApi('GET', '/api/validate-withdrawal/' + currentUser.id + '?amount=' + amount)
-            : await fetch(apiBase + '/api/validate-withdrawal/' + currentUser.id + '?amount=' + amount);
-        const val = await valRes.json();
-        if (!val.ok) {
-            const errorMessages = {
-                below_min: 'Minimum withdrawal is ' + (val.min || 50) + ' ETB',
-                insufficient: 'Insufficient balance! Your balance: ' + (val.balance || 0) + ' ETB',
-                above_max: 'Maximum withdrawal is ' + (val.max || 50000) + ' ETB',
-                no_phone: 'Please register with your phone number first',
-                account_new: 'Your account is too new. Wait 24 hours after registration.',
-                deposit_required: 'Minimum initial deposit of ' + (val.min_deposit || 50) + ' ETB required before withdrawing.',
-                pending_exists: 'You already have a pending withdrawal. Wait for it to be processed.',
-                daily_limit: 'Daily withdrawal limit reached (' + (val.limit || 3) + '/day). Try again tomorrow.',
-                cooldown: 'Please wait ' + (val.minutes || 0) + ' minutes before another withdrawal.',
-                invalid_amount: 'Please enter a valid withdrawal amount.',
-                not_registered: 'User account not found. Please register first.',
-                system_error: 'Server error validating withdrawal. Try again.'
-            };
-            showToast(errorMessages[val.error] || 'Withdrawal not allowed (' + (val.error || 'error') + ')');
-            return;
-        }
+        // The create endpoint performs the same validation again under the
+        // authoritative account lock; one request avoids a slow validation/create
+        // race and keeps the idempotency key attached to the money operation.
         // Server-side creation: wallet decrement + withdrawal doc + admin notify all
         // happen atomically on the backend. No more client-side play_wallet writes.
         var res;
+        showLoading('Submitting withdrawal...');
         if (window.playerApi) {
             res = await window.playerApi('POST', '/api/withdrawals/create', {
                 amount: amount,
                 phone: phone,
                 telebirr_name: name
-            });
+            }, { 'X-Idempotency-Key': _withdrawalRequestKey });
         } else {
             res = await fetch(apiBase + '/api/withdrawals/create', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'X-Idempotency-Key': _withdrawalRequestKey },
                 body: JSON.stringify({ amount: amount, phone: phone, telebirr_name: name })
             });
         }
         var data = await res.json();
         if (!res.ok || data.error || !data.ok) {
             const createMessages = {
+                below_min: 'Minimum withdrawal: ' + (data.min || 50) + ' ETB.',
                 insufficient: 'Insufficient balance for this withdrawal.',
+                above_max: 'Withdrawal exceeds the allowed maximum.',
                 no_phone: 'Please register with your phone number first.',
                 no_name: 'Enter your TeleBirr full name.',
-                invalid_amount: 'Please enter a valid withdrawal amount.'
+                account_new: 'Your account is too new. Wait 24 hours after registration.',
+                deposit_required: 'A qualifying deposit is required before withdrawing.',
+                pending_exists: 'You already have a pending withdrawal.',
+                daily_limit: 'Daily withdrawal limit reached.',
+                cooldown: 'Please wait before another withdrawal.',
+                invalid_amount: 'Please enter a valid withdrawal amount.',
+                system_error: 'Server error validating withdrawal. Try again.'
             };
             showToast(createMessages[data.error] || data.detail || 'Could not submit withdrawal');
+            if (data.error && data.error !== 'system_error') _withdrawalRequestKey = null;
             return;
         }
         hideScreen('withdrawModal');
+        _withdrawalRequestKey = null;
+        _txnCache = null;
+        _txnCacheAt = 0;
         showToast('Withdrawal request submitted!');
         if (typeof loadWalletTransactions === 'function') loadWalletTransactions();
     } catch (err) { showToast('Error: ' + err.message); }
+    finally {
+        hideLoading();
+        _setWalletButtonBusy('withdraw-submit', false);
+        _withdrawSubmitInFlight = false;
+    }
 }
 
 function showTransferModal() { document.getElementById('transfer-modal').classList.remove('hidden'); }
 function hideTransferModal() { document.getElementById('transfer-modal').classList.add('hidden'); }
 
 var _txnCache = null;
+var _txnCacheAt = 0;
 async function loadWalletTransactions() {
     if (!currentUser) return;
     var container = document.getElementById('transaction-list');
     if (!container) return;
+    if (_txnCache && Date.now() - _txnCacheAt < 15000) {
+        container.innerHTML = _txnCache;
+        return;
+    }
 
     container.innerHTML = '<div class="glass rounded-xl p-4 text-center"><p class="text-white/30 text-sm">Loading transactions...</p></div>';
     try {
         var uid = String(currentUser.id);
         var results = await Promise.all([
-            db.collection('deposits').where('userId', '==', uid).get(),
-            db.collection('withdrawals').where('userId', '==', uid).get()
+            db.collection('deposits').where('userId', '==', uid).orderBy('createdAt', 'desc').limit(20).get(),
+            db.collection('withdrawals').where('userId', '==', uid).orderBy('createdAt', 'desc').limit(20).get()
         ]);
 
         if (!results[0].docs.length && !results[1].docs.length) {
@@ -265,6 +325,8 @@ async function loadWalletTransactions() {
                 '<div class="text-right"><div class="text-sm font-bold ' + color + '">' + item.amount + ' ETB</div>' +
                 '<div class="text-[11px] text-white/35">#' + item.id.slice(0, 6) + '</div></div></div>';
         }).join('');
+        _txnCache = container.innerHTML;
+        _txnCacheAt = Date.now();
     } catch (err) {
         container.innerHTML = '<div class="glass rounded-xl p-4 text-center"><p class="text-red-400 text-sm">Could not load transactions</p></div>';
     }

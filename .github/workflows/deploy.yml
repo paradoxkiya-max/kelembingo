@@ -36,3 +36,5 @@ jobs:
         run: node --check dashboard/js/firebase.js && node --check dashboard/js/game-board.js && python tools/test_realtime_winner_hardening.py
       - name: Verify stake-selection performance path
         run: node --check dashboard/js/page-loader.js && node --check dashboard/js/auth.js && node --check dashboard/js/card-select.js && node --check dashboard/js/rules.js && python tools/test_stake_selection_performance.py && python tools/test_public_stats_helper.py
+      - name: Verify payment UI hardening
+        run: node --check dashboard/js/wallet.js && node --check dashboard/js/firebase.js && python tools/test_payment_ui_hardening.py

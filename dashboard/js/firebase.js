@@ -496,10 +496,13 @@
     window.API_BASE = API_BASE;
 
     // Player-authenticated fetch helper (sends X-Player-Token) for raw fetch calls.
-    window.playerApi = function(method, path, body) {
+    window.playerApi = function(method, path, body, extraHeaders) {
         const opts = { method, headers: { 'Content-Type': 'application/json' } };
         const t = localStorage.getItem('playerToken');
         if (t) opts.headers['X-Player-Token'] = t;
+        if (extraHeaders) Object.keys(extraHeaders).forEach(function(key) {
+            opts.headers[key] = extraHeaders[key];
+        });
         if (body !== undefined) opts.body = JSON.stringify(body);
         const url = API_BASE ? (API_BASE + path) : path;
         return fetch(url, opts);
