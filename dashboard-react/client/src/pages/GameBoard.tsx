@@ -30,6 +30,8 @@ export default function GameBoard() {
   const [result, setResult] = useState<{ winner: boolean; payout?: number; message?: string } | null>(null);
   const previousCalled = useRef<number[]>([]);
   const claimAttempts = useRef(new Set<string>());
+  const callAudio = useRef<HTMLAudioElement | null>(null);
+  const cartelaAudio = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     if (!roundId) { navigate("/"); return; }
@@ -43,9 +45,7 @@ export default function GameBoard() {
     const numbersCalled = round?.called_numbers || [];
     const latest = numbersCalled[numbersCalled.length - 1] || null;
     setCurrent(latest);
-    if (latest && latest !== previousCalled.current[previousCalled.current.length - 1] && voice) {
-      try { window.speechSynthesis?.cancel(); window.speechSynthesis?.speak(new SpeechSynthesisUtterance(`${letters[Math.floor((latest - 1) / 15)]} ${latest}`)); } catch { /* speech is best-effort */ }
-    }
+    if (latest && latest !== previousCalled.current[previousCalled.current.length - 1] && voice) playNumberAudio(latest, callAudio);
     previousCalled.current = numbersCalled;
     if (autoMark && latest) setMarked((old) => { const next = { ...old }; for (const card of cartelas) { const existing = new Set(next[card.number] || []); if (flattenCartela(card).includes(latest)) existing.add(latest); next[card.number] = existing; } return next; });
   }, [round?.called_numbers, voice, autoMark, cartelas]);
@@ -90,6 +90,7 @@ export default function GameBoard() {
     try {
       const response = await playerApi.claimBingo(roundId, player.user_id, number);
       if (!response.winner && !response.already_completed && attemptKey) claimAttempts.current.delete(attemptKey);
+      if (response.winner && voice) playCartelaAudio(number, cartelaAudio);
       setResult(response.winner ? { winner: true, payout: response.prize_per_winner } : { winner: false, message: "The server did not validate this cartela." });
     } catch (e) {
       if (attemptKey) claimAttempts.current.delete(attemptKey);
@@ -105,7 +106,9 @@ export default function GameBoard() {
 }
 
 function CartelaCard({ card, marked, called, onMark }: { card: Cartela; marked: Set<number>; called: Set<number>; onMark: (number: number) => void }) { const values = flattenCartela(card); return <div className="cartela-container overflow-hidden rounded-xl border border-orange-400/30"><div className="cartela-header bg-gradient-to-br from-[#FF8C00] to-[#FF6B00] py-1 text-center text-[10px] font-black tracking-wider text-white">CARTELA NO: {card.number}</div><div className="grid grid-cols-5 gap-px" style={{ background: "rgba(26,26,46,0.5)" }}>{letters.map((letter, index) => <div key={letter} className="py-0.5 text-center text-[8px] font-black text-white" style={{ background: colors[index] }}>{letter}</div>)}{values.map((number, index) => { const isMarked = marked.has(number) || (index === 12 && true); return <button key={`${card.number}-${index}`} onClick={() => onMark(number)} className={`cartela-cell aspect-square text-[9px] font-black transition-transform active:scale-90 ${isMarked ? "marked bg-gradient-to-br from-[#10B981] to-[#059669] text-white shadow-[0_0_8px_rgba(16,185,129,0.3)]" : "bg-[rgba(30,35,64,0.8)] text-white/75"}`} disabled={!called.has(number) && index !== 12}>{index === 12 ? "★" : number}</button>; })}</div></div>; }
-function flattenCartela(card?: Cartela) { const source: unknown = card?.data || card?.grid || []; const values = Array.isArray(source) && Array.isArray(source[0]) ? (source as number[][]).reduce<number[]>((all, row) => all.concat(row), []) : Array.isArray(source) ? source as number[] : []; return values.length === 25 ? values : Array.from({ length: 25 }, (_, index) => index + 1); }
+function flattenCartela(card?: Cartela) { const source: unknown = card?.cartela || card?.data || card?.grid || []; const values = Array.isArray(source) && Array.isArray(source[0]) ? (source as number[][]).reduce<number[]>((all, row) => all.concat(row), []) : Array.isArray(source) ? source as number[] : []; return values.length === 25 ? values : Array.from({ length: 25 }, (_, index) => index + 1); }
+function playNumberAudio(number: number, audioRef: { current: HTMLAudioElement | null }) { const letter = letters[Math.floor((number - 1) / 15)]; const audio = new Audio(`/audio/${letter}${number}.mp3`); audio.preload = "auto"; audioRef.current?.pause(); audioRef.current = audio; void audio.play().catch(() => undefined); }
+function playCartelaAudio(number: number, audioRef: { current: HTMLAudioElement | null }) { const audio = new Audio(`/audio/cartela_bingo/cartela_${number}.mp3`); audio.preload = "auto"; audioRef.current?.pause(); audioRef.current = audio; void audio.play().catch(() => undefined); }
 function checkBingoLocal(flat: number[], called: number[]) { const calledSet = new Set(called); const grid = Array.from({ length: 5 }, (_, row) => flat.slice(row * 5, row * 5 + 5)); const marked = (number: number) => number === 0 || calledSet.has(number); for (let row = 0; row < 5; row += 1) if (grid[row].every(marked)) return true; for (let column = 0; column < 5; column += 1) if (grid.every((row) => marked(row[column]))) return true; if ([0, 1, 2, 3, 4].every((index) => marked(grid[index][index]))) return true; if ([0, 1, 2, 3, 4].every((index) => marked(grid[index][4 - index]))) return true; return [[0, 0], [0, 4], [4, 0], [4, 4]].every(([row, column]) => { const number = grid[row][column]; return number !== 0 && calledSet.has(number); }); }
 function toneClass(tone: string) { return tone === "orange" ? "border-[#FF8C00]/30 bg-[#FF8C00]/10 text-[#FF8C00]" : tone === "green" ? "border-[#10B981]/30 bg-[#10B981]/10 text-[#34D399]" : tone === "blue" ? "border-[#3B82F6]/30 bg-[#3B82F6]/10 text-[#60A5FA]" : tone === "purple" ? "border-[#A855F7]/30 bg-[#A855F7]/10 text-[#C084FC]" : tone === "teal" ? "border-[#14B8A6]/30 bg-[#14B8A6]/10 text-[#2DD4BF]" : "border-red-400/30 bg-red-500/10 text-red-300"; }
 function tagClass(number: number) { return ["border-blue-400/40 bg-blue-500/20", "border-violet-400/40 bg-violet-500/20", "border-fuchsia-400/40 bg-fuchsia-500/20", "border-emerald-400/40 bg-emerald-500/20", "border-orange-400/40 bg-orange-500/20"][Math.floor((number - 1) / 15)] || "border-white/10 bg-white/5"; }
