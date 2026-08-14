@@ -20,7 +20,7 @@ assert 'extraHeaders' in firebase
 assert 'return {"ok": False, "error": "system_error"}' in admin_api
 assert 'asyncio.create_task(_notify_admin_deposit_web' in admin_api
 assert 'asyncio.create_task(_notify_admin_withdrawal_web' in admin_api
-assert "const PAGE_ASSET_VERSION = 'pay-1'" in page_loader
+assert "const PAGE_ASSET_VERSION = 'derash-1'" in page_loader
 assert 'js/firebase.js?v=pay-1' in game_html
 assert 'js/wallet.js?v=pay-1' in game_html
 

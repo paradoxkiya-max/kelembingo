@@ -378,7 +378,10 @@ function processRoundSnapshot(data) {
         }
     }
     var roundStake = data.stake || currentStake || 10;
-    var derash = Math.round(playerCount * roundStake * 0.75 * 10) / 10;
+    var storedDerash = Number(data.derash);
+    var derash = isFinite(storedDerash) && storedDerash >= 0
+        ? Math.round(storedDerash * 10) / 10
+        : Math.round(playerCount * roundStake * 0.75 * 10) / 10;
     if (elPlayers) elPlayers.textContent = playerCount;
     if (elDerash) elDerash.textContent = derash + ' ETB';
     if (elCalledCount) elCalledCount.textContent = (data.called_numbers || []).length;
@@ -694,7 +697,10 @@ function loadMyCartelas(roundData) {
         if (el = document.getElementById('game-called-count')) el.textContent = called.length;
         var pc = roundData.player_count || 0;
         var roundStake = roundData.stake || currentStake || 10;
-        var dr = Math.round(pc * roundStake * 0.75 * 10) / 10;
+        var storedDerash = Number(roundData.derash);
+        var dr = isFinite(storedDerash) && storedDerash >= 0
+            ? Math.round(storedDerash * 10) / 10
+            : Math.round(pc * roundStake * 0.75 * 10) / 10;
         if (el = document.getElementById('game-players')) el.textContent = pc;
         if (el = document.getElementById('game-derash')) el.textContent = dr + ' ETB';
         called.forEach(function(num, idx) {

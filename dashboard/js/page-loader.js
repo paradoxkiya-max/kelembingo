@@ -1,7 +1,7 @@
 // Page Loader System for Kelem Bingo
 // Dynamically loads HTML pages and components into the shell game.html
 
-const PAGE_ASSET_VERSION = 'pay-1';
+const PAGE_ASSET_VERSION = 'derash-1';
 
 const PageLoader = {
     cache: {},
