@@ -97,6 +97,7 @@ game_source = (REPO / "dashboard" / "js" / "game-board.js").read_text()
 
 assert "SystemEvent.id > last_id" not in admin_source
 assert "_latest_event_cursor" in admin_source
+assert "from sqlalchemy import and_, or_, text as sql_text" in admin_source
 assert "_last_broadcast_fingerprints" in admin_source
 assert "Exactly one winner is required" in round_source
 assert "claim-bingo" in admin_source
