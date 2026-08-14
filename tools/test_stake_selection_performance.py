@@ -8,7 +8,9 @@ gateway = (ROOT / 'dashboard-react/client/src/lib/gateway.ts').read_text()
 card_select = (ROOT / 'dashboard-react/client/src/pages/CartelaSelect.tsx').read_text()
 admin_api = (ROOT / 'api/admin_api.py').read_text()
 assert 'lazy(() => import("@/pages/CartelaSelect"))' in app
-assert 'playerApi.cartelas' in card_select
+assert 'CARTELA_POOL' in card_select
+assert 'playerApi.cartelas' not in card_select
+assert 'playerApi.cartela(number)' in card_select
 assert 'playerApi.activeRounds' in card_select
 assert 'playerApi.stats()' in player_context
 assert 'setInterval(() => void playerApi.stats().then(setStats).catch(() => undefined), 30000)' in player_context

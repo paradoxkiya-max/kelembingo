@@ -11,7 +11,7 @@ function webApp() { return (window as Window & { Telegram?: { WebApp?: { initDat
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [player, setPlayer] = useState<Player | null>(null); const [stats, setStats] = useState<PublicStats | null>(null); const [loading, setLoading] = useState(true); const [telegramState, setTelegramState] = useState<TelegramAuthState>("detecting"); const [authError, setAuthError] = useState("");
   const refresh = useCallback(async () => {
-    const app = webApp(); const initData = app?.initData || ""; app?.ready?.(); app?.expand?.(); setAuthError(""); setPlayer(null);
+    const app = webApp(); const initData = app?.initData || ""; app?.ready?.(); app?.expand?.(); setAuthError("");
     const publicStats = await Promise.allSettled([playerApi.stats()]); if (publicStats[0].status === "fulfilled") setStats(publicStats[0].value);
     if (!app) { setTelegramState("browser"); setLoading(false); return; }
     if (!initData) { setTelegramState("telegram-no-init-data"); setLoading(false); return; }

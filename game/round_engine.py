@@ -651,6 +651,7 @@ class RoundEngine:
                         'winner': existing[0] == str(user_id),
                         'winner_ids': [int(existing[0])],
                         'winning_cartela': data.get('winning_cartela'),
+                        'prize_per_winner': data.get('prize_per_winner', 0),
                         'already_completed': True,
                         'error': None if existing[0] == str(user_id) else 'Another player already won',
                     }
@@ -707,6 +708,7 @@ class RoundEngine:
                 'winner': True,
                 'winner_ids': [int(user_id)],
                 'winning_cartela': canonical_cartela,
+                'prize_per_winner': total_pool * 0.75,
                 'already_completed': False,
             }
 

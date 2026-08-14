@@ -6,7 +6,7 @@ select = (ROOT / "dashboard-react/client/src/pages/CartelaSelect.tsx").read_text
 gateway = (ROOT / "dashboard-react/client/src/lib/gateway.ts").read_text()
 audio_root = ROOT / "dashboard-react/client/public/audio"
 
-assert "playerApi.cartela(Number(number))" in game
+assert "playerApi.cartela(number)" in game
 assert "card?.cartela || card?.data || card?.grid" in game
 assert "card?.cartela || card?.data || card?.grid" in select
 assert "playNumberAudio" in game and "/audio/${letter}${number}.mp3" in game

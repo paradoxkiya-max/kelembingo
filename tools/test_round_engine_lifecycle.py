@@ -92,6 +92,7 @@ with tempfile.TemporaryDirectory() as tmp:
     })
     winner = asyncio.run(engine.claim_bingo("round-person", 2, 2))
     assert winner.get("winner") is True, winner
+    assert winner.get("prize_per_winner") == 15, winner
     person_round = db.collection("rounds").document("round-person").get().to_dict()
     assert person_round["winners"] == ["2"], person_round
     assert person_round["winning_cartela"] == 2, person_round

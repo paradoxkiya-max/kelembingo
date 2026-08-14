@@ -42,12 +42,24 @@ class RoomManager {
 
 export const roomManager = new RoomManager();
 
-export function observeRound(roundId: string, listener: Listener) {
-  let loaded = false; let queued: SnapshotMessage | null = null; let last = "";
+export function observeRound(roundId: string, listener: Listener, options: { fetchInitial?: boolean; onError?: () => void } = {}) {
+  const fetchInitial = options.fetchInitial !== false;
+  let loaded = !fetchInitial; let queued: SnapshotMessage | null = null; let last = "";
   const deliver = (data: Round | null) => { const fingerprint = JSON.stringify(data); if (fingerprint === last) return; last = fingerprint; listener(data); };
-  const handle = (message: SnapshotMessage) => { if (message.type === "cartela_pool") return; const payload = message.data && typeof message.data === "object" ? message.data as Round : null; if (!loaded) queued = message; else deliver(message.exists === false ? null : payload); };
+  const handle = (message: SnapshotMessage) => {
+    if (message.type === "cartela_pool") return;
+    const raw = message.data && typeof message.data === "object" ? message.data as Record<string, unknown> : null;
+    const payload = raw && raw.round && typeof raw.round === "object" ? raw.round as Round : raw as Round | null;
+    if (!loaded) queued = message;
+    else if (message.exists === false) deliver(null);
+    else if (payload) deliver(payload);
+  };
   const unsubscribe = roomManager.subscribeRound(roundId, handle);
-  gatewayFetch<{ id?: string; data?: Round }>(`/api/db/rounds/${encodeURIComponent(roundId)}`).then((response) => { loaded = true; deliver(response.data || response as unknown as Round); if (queued) { const latest = queued; queued = null; deliver(latest.exists === false ? null : latest.data as Round); } }).catch(() => { loaded = true; });
+  if (fetchInitial) {
+    gatewayFetch<{ round?: Round }>(`/api/rounds/${encodeURIComponent(roundId)}`)
+      .then((response) => { loaded = true; deliver(response.round || null); if (queued) { const latest = queued; queued = null; if (latest.exists === false) deliver(null); else if (latest.data) deliver(latest.data as Round); } })
+      .catch(() => { loaded = true; options.onError?.(); });
+  }
   return unsubscribe;
 }
 
