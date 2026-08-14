@@ -25,7 +25,7 @@ from game.round_engine import RoundEngine, DEFAULT_STAKE, VALID_STAKES, SELECTIO
 from handlers.user_manager import UserManager
 from handlers.bot_content import get_bot_text
 from datetime import datetime, date, timedelta, timezone
-from sqlalchemy import text as sql_text
+from sqlalchemy import and_, or_, text as sql_text
 from telegram import Bot
 # Firebase replaced by SQLAlchemy emulator (firestore_db.py)
 
