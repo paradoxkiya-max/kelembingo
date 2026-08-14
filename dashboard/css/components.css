@@ -263,8 +263,9 @@
     font-size: 13px;
     border-radius: 8px;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: transform 0.15s ease, opacity 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
     position: relative;
+    contain: layout style;
     background: linear-gradient(135deg, #1E2340, #151833);
     color: white;
     box-shadow: 0 2px 8px rgba(0,0,0,0.3);

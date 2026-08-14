@@ -4,6 +4,11 @@ var _lastPendingSelections = {};
 var _lastToggleTime = 0;
 var _masterCartelaCatalog = null;
 var _masterCartelaCatalogPromise = null;
+var _cardCellByNumber = new Map();
+var _renderedTakenSet = new Set();
+var _lastSelectionRealtimeKey = null;
+var _lastGridStateKey = null;
+var _gridClickHandler = null;
 
 async function _loadMasterCartelaCatalog() {
     if (_masterCartelaCatalog) return _masterCartelaCatalog;
@@ -46,6 +51,19 @@ function countTotalPendingSelections(pendingSelections) {
         if (Array.isArray(nums)) total += nums.length;
     });
     return total;
+}
+
+function _selectionRealtimeKey(status, playerCount, takenCartelas, pendingSelections) {
+    return String(status || '') + '|' + String(playerCount || 0) + '|' +
+        JSON.stringify(takenCartelas || []) + '|' + JSON.stringify(pendingSelections || {});
+}
+
+function _cleanupCartelaGridListener() {
+    var grid = document.getElementById('card-select-grid');
+    if (grid && _gridClickHandler) grid.removeEventListener('click', _gridClickHandler);
+    _gridClickHandler = null;
+    _cardCellByNumber.clear();
+    _renderedTakenSet = new Set();
 }
 
 // ==================== PLAY NOW ====================
@@ -298,6 +316,9 @@ async function showCardSelection(roundId, roundData) {
     // A new round can reuse the same browser tab. Remove the previous fast
     // Socket.IO callback before installing the handler for this round.
     _cleanupCartelaPoolListener();
+    _cleanupCartelaGridListener();
+    _lastSelectionRealtimeKey = null;
+    _lastGridStateKey = null;
     selectedCartelas = [];
     _originalPlayWallet = getSpendablePlayWallet();
     listenerReady = false;
@@ -359,24 +380,35 @@ async function showCardSelection(roundId, roundData) {
             }
         });
 
-        if (grid) grid.innerHTML = '';
-        masterCatalog.forEach(function(item) {
-            var d = item.data;
-            var num = d.number;
-            var cell = document.createElement('div');
-            cell.className = 'card-tile';
-            cell.textContent = num;
-            cell.dataset.num = num;
+        if (grid) {
+            var fragment = document.createDocumentFragment();
+            _cardCellByNumber.clear();
+            _renderedTakenSet = new Set();
+            masterCatalog.forEach(function(item) {
+                var d = item.data;
+                var num = d.number;
+                var cell = document.createElement('div');
+                cell.className = 'card-tile';
+                cell.textContent = num;
+                cell.dataset.num = num;
+                _cardCellByNumber.set(String(num), cell);
+                fragment.appendChild(cell);
+            });
+            grid.replaceChildren(fragment);
+            _gridClickHandler = function(event) {
+                var cell = event.target.closest ? event.target.closest('.card-tile') : null;
+                if (!cell || !grid.contains(cell)) return;
+                var num = parseInt(cell.dataset.num, 10);
+                if (cell.classList.contains('taken')) {
+                    showToast('Card #' + num + ' is already taken by another player');
+                    return;
+                }
+                toggleCardSelection(num, cell);
+            };
+            grid.addEventListener('click', _gridClickHandler, { passive: true });
+        }
 
-            if (takenSet.has(num) || takenSet.has(String(num))) {
-                cell.classList.add('taken', 'taken-flash');
-                cell.onclick = (function(n) { return function() { showToast('Card #' + n + ' is already taken by another player'); }; })(num);
-            } else {
-                cell.onclick = (function(n, c) { return function() { toggleCardSelection(n, c); }; })(num, cell);
-            }
-            if (grid) grid.appendChild(cell);
-        });
-
+        _updateCartelaGrid(roundData.taken_cartelas, roundData.pending_selections, grid);
         if (roundUnsubscribe) roundUnsubscribe();
         roundUnsubscribe = db.collection('rounds').doc(roundId).onSnapshot(function(snap) {
             if (!snap.exists) return;
@@ -393,34 +425,10 @@ async function showCardSelection(roundId, roundData) {
                     nums.forEach(function(n) { nowTaken.add(parseInt(n) || n); });
                 }
             });
-            if (grid) {
-                var changed = false;
-                grid.querySelectorAll('.card-tile').forEach(function(cell) {
-                    var n = parseInt(cell.dataset.num);
-                    if (nowTaken.has(n) || nowTaken.has(String(n))) {
-                        if (!cell.classList.contains('taken') && !cell.classList.contains('selected')) {
-                            cell.className = 'card-tile taken taken-flash';
-                            cell.onclick = (function(num) { return function() { showToast('Card #' + num + ' is already taken by another player'); }; })(n);
-                            var selIdx = selectedCartelas.indexOf(n);
-                            if (selIdx > -1) {
-                                selectedCartelas.splice(selIdx, 1);
-                                changed = true;
-                                showToast('Card #' + n + ' was taken by another player!');
-                            }
-                        }
-                    } else {
-                        // Not taken — restore click handler if needed
-                        if (cell.classList.contains('taken') && !cell.classList.contains('selected')) {
-                            cell.className = 'card-tile';
-                            cell.onclick = (function(num, c) { return function() { toggleCardSelection(num, c); }; })(n, cell);
-                        }
-                    }
-                });
-                if (changed) {
-                    updateSelectedInfo();
-                    renderAllPreviews();
-                }
-            }
+            var snapshotKey = _selectionRealtimeKey(rd.status, rd.player_count, rawTaken, pending);
+            if (snapshotKey === _lastSelectionRealtimeKey) return;
+            _lastSelectionRealtimeKey = snapshotKey;
+            _updateCartelaGrid(rawTaken, pending, grid);
 
             if (!listenerReady) {
                 listenerReady = true;
@@ -497,6 +505,9 @@ async function showCardSelection(roundId, roundData) {
         if (window._bingoSocket) {
             _cartelaPoolHandler = function(msg) {
                 if (msg.round_id !== roundId) return;
+                var poolKey = _selectionRealtimeKey('', msg.player_count, msg.taken_cartelas, msg.pending_selections);
+                if (poolKey === _lastSelectionRealtimeKey) return;
+                _lastSelectionRealtimeKey = poolKey;
                 _updateCartelaGrid(msg.taken_cartelas, msg.pending_selections, grid);
                 var livePC = msg.player_count || 0;
                 _lastKnownPlayerCount = livePC;
@@ -565,27 +576,33 @@ function _updateCartelaGrid(takenCartelas, pendingSelections, grid) {
             nums.forEach(function(n) { nowTaken.add(parseInt(n) || n); });
         }
     });
+    var stateKey = JSON.stringify(Array.from(nowTaken).sort(function(a, b) { return a - b; }));
+    if (stateKey === _lastGridStateKey) return;
+    _lastGridStateKey = stateKey;
     var changed = false;
-    grid.querySelectorAll('.card-tile').forEach(function(cell) {
-        var n = parseInt(cell.dataset.num);
-        if (nowTaken.has(n) || nowTaken.has(String(n))) {
-            if (!cell.classList.contains('taken') && !cell.classList.contains('selected')) {
-                cell.className = 'card-tile taken taken-flash';
-                cell.onclick = (function(num) { return function() { showToast('Card #' + num + ' is already taken by another player'); }; })(n);
-                var selIdx = selectedCartelas.indexOf(n);
-                if (selIdx > -1) {
-                    selectedCartelas.splice(selIdx, 1);
-                    changed = true;
-                    showToast('Card #' + n + ' was taken by another player!');
-                }
-            }
-        } else {
-            if (cell.classList.contains('taken') && !cell.classList.contains('selected')) {
-                cell.className = 'card-tile';
-                cell.onclick = (function(num) { return function() { toggleCardSelection(num, cell); }; })(n);
-            }
+    nowTaken.forEach(function(value) {
+        var n = parseInt(value, 10);
+        var cell = _cardCellByNumber.get(String(n));
+        if (!cell) return;
+        var selIdx = selectedCartelas.indexOf(n);
+        if (selIdx > -1) {
+            selectedCartelas.splice(selIdx, 1);
+            cell.classList.remove('selected');
+            changed = true;
+            showToast('Card #' + n + ' was taken by another player!');
+        }
+        if (!cell.classList.contains('taken')) {
+            cell.classList.add('taken', 'taken-flash');
         }
     });
+    _renderedTakenSet.forEach(function(value) {
+        if (nowTaken.has(value) || nowTaken.has(String(value))) return;
+        var cell = _cardCellByNumber.get(String(value));
+        if (cell && !cell.classList.contains('selected')) {
+            cell.className = 'card-tile';
+        }
+    });
+    _renderedTakenSet = nowTaken;
     if (changed) {
         updateSelectedInfo();
         renderAllPreviews();

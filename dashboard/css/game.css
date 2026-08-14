@@ -47,6 +47,10 @@ body { background: #0D1117; color: white; overflow-x: hidden; }
     padding: 6px;
     min-height: 0;
     align-content: start;
+    contain: layout style;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
 }
 @media (max-width: 360px) { .card-select-grid { grid-template-columns: repeat(7, 1fr); gap: 4px; } }
 .card-select-grid::-webkit-scrollbar { width: 4px; }
