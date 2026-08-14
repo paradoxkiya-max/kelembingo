@@ -45,7 +45,7 @@ BONUS_CONFIRM = 9
 PLAY_STAKE = 10
 
 MAIN_KEYBOARD = ReplyKeyboardRemove()
-WEBAPP_URL = os.getenv("WEBAPP_URL", "https://kelembingo-frontend-i8yy.onrender.com/game")
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://kelembingo-frontend-i8yy.onrender.com/")
 MAIN_INLINE_KEYBOARD = InlineKeyboardMarkup(
     [
         [InlineKeyboardButton("Play 🎮", callback_data="menu_play"), InlineKeyboardButton("Register 📝", callback_data="menu_register")],
