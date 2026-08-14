@@ -1,6 +1,8 @@
 // Page Loader System for Kelem Bingo
 // Dynamically loads HTML pages and components into the shell game.html
 
+const PAGE_ASSET_VERSION = 'rtw-1';
+
 const PageLoader = {
     cache: {},
     componentsLoaded: false,
@@ -31,7 +33,7 @@ const PageLoader = {
         }
         
         try {
-            const response = await fetch(`pages/${pageName}.html`);
+            const response = await fetch(`pages/${pageName}.html?v=${PAGE_ASSET_VERSION}`);
             if (!response.ok) throw new Error(`Failed to load ${pageName}`);
             const html = await response.text();
             this.cache[`page:${pageName}`] = html;
@@ -56,7 +58,7 @@ const PageLoader = {
         }
         
         try {
-            const response = await fetch(`components/${componentPath}`);
+            const response = await fetch(`components/${componentPath}?v=${PAGE_ASSET_VERSION}`);
             if (!response.ok) throw new Error(`Failed to load ${componentPath}`);
             const html = await response.text();
             this.cache[cacheKey] = html;

@@ -131,8 +131,19 @@ function listenToUserData() {
     });
 }
 
+function stopStatsListener() {
+    if (statsUnsubscribe) {
+        statsUnsubscribe();
+        statsUnsubscribe = null;
+    }
+    if (statsInterval) {
+        clearInterval(statsInterval);
+        statsInterval = null;
+    }
+}
+
 function startStatsListener() {
-    if (statsUnsubscribe) statsUnsubscribe();
+    stopStatsListener();
     statsUnsubscribe = db.collection('rounds').where('status', 'in', ['selecting', 'playing']).onSnapshot(function(snap) {
         var totalCartelas = 0;
         snap.forEach(function(doc) { totalCartelas += (doc.data().player_count || 0); });
@@ -162,6 +173,5 @@ function startStatsListener() {
         }).catch(function() {});
     }
     refreshCompletedStats();
-    if (statsInterval) clearInterval(statsInterval);
     statsInterval = setInterval(refreshCompletedStats, 10000);
 }

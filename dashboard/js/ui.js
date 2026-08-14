@@ -54,6 +54,11 @@ async function navigateTo(screen) {
         var navBtn = document.querySelector('.nav-item[data-screen="' + screen + '"]');
         if (navBtn) navBtn.classList.add('active');
         currentScreen = screen;
+        if (screen === 'game' && typeof stopStatsListener === 'function') {
+            stopStatsListener();
+        } else if (screen !== 'game' && typeof startStatsListener === 'function' && !statsUnsubscribe) {
+            startStatsListener();
+        }
         var bottomNav = document.getElementById('bottom-nav');
         if (bottomNav) bottomNav.style.display = (screen === 'game') ? 'none' : '';
         if (screen === 'history' && currentUser) loadHistory();

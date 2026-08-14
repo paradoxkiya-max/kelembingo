@@ -450,6 +450,7 @@ async function showCardSelection(roundId, roundData) {
                 if (rd.players && rd.players[uid]) {
                     document.getElementById('card-select-screen').classList.add('hidden');
                     stopSelectionCountdown();
+                    _cleanupCartelaPoolListener();
                     navigateTo('game').then(function() {
                         loadMyCartelas(rd);
                         listenToRound(roundId);
@@ -459,6 +460,7 @@ async function showCardSelection(roundId, roundData) {
                     document.getElementById('card-select-screen').classList.add('hidden');
                     stopSelectionCountdown();
                     isSpectator = true;
+                    _cleanupCartelaPoolListener();
                     navigateTo('game').then(function() {
                         setupGameBoard();
                         listenToRound(roundId);
@@ -815,6 +817,7 @@ async function confirmSelection() {
         if (cs) cs.classList.add('hidden');
         stopSelectionCountdown();
         if (roundUnsubscribe) { roundUnsubscribe(); roundUnsubscribe = null; }
+        _cleanupCartelaPoolListener();
         await navigateTo('game');
         setupGameBoard();
         listenToRound(joinRoundId);

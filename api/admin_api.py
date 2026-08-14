@@ -572,6 +572,13 @@ def get_server_time():
 # ─── Background game loop state ───
 _active_game_tasks = {}  # round_id -> asyncio.Task
 _user_operation_locks = {}  # user_id -> asyncio.Lock for wallet operations in this process
+
+# Realtime delivery state. Direct request handlers and the durable event bridge can
+# observe the same write; identical snapshots are emitted only once per process.
+_realtime_state_lock = asyncio.Lock()
+_last_broadcast_fingerprints = {}
+_BROADCAST_FINGERPRINT_LIMIT = 4096
+
 BINGO_NUMBERS = list(range(1, 76))
 NUMBER_CALL_INTERVAL = 5  # seconds
 
@@ -593,6 +600,7 @@ class SelectRequest(BaseModel):
 
 class BingoCheckRequest(BaseModel):
     user_id: int
+    winning_cartela: Optional[int] = None
 
 
 class EndRoundRequest(BaseModel):
@@ -786,19 +794,12 @@ async def _game_loop(round_id: str):
                 number = await engine.call_number(round_id)
                 await broadcast_event('rounds', round_id)
             except Exception as e:
-                logger.warning(f"Smart predictor error for {round_id}: {e}")
-                import random
-                number = random.choice(available)
-                called = list(data.get('called_numbers', []))
-                called.append(number)
-                now = datetime.now(tz=timezone.utc)
-                await _db(lambda: db.collection('rounds').document(round_id).update({
-                    'called_numbers': called,
-                    'last_called_number': number,
-                    'last_called_at': now,
-                    'next_number_at': _grid_next_number_at(data.get('game_started_at'), len(called)),
-                }))
-                await broadcast_event('rounds', round_id)
+                # Never fall back to an ordinary update based on the stale
+                # pre-delay snapshot. The serialized engine call is the only
+                # safe writer for called_numbers across gateway processes.
+                logger.warning(f"Serialized number call failed for {round_id}: {e}")
+                await asyncio.sleep(0.25)
+                continue
 
             if number is None:
                 continue
@@ -820,7 +821,10 @@ async def _game_loop(round_id: str):
                         logger.error(f"[GameLoop] Error distributing prizes: {e}")
                 # payout_processed already set atomically inside end_round
                 await broadcast_event('rounds', round_id)
-                logger.info(f"[GameLoop] ROUND COMPLETE {round_id}: winner={winner_id} cartela={winning_cartela} calls={len(called_now)} reason={completion_reason} natural_winners={len(winner_entries)}")
+                logger.info(
+                    f"[GameLoop] ROUND COMPLETE {round_id}: "
+                    f"winners={winners} calls={len(rd_after.get('called_numbers', []) or [])}"
+                )
                 return
 
             called_now = rd_after.get('called_numbers', [])
@@ -837,32 +841,35 @@ async def _game_loop(round_id: str):
                 completion_reason = 'no_winner_max_30'
 
             if chosen_winner:
-                now = datetime.now(tz=timezone.utc)
-                player_count = rd_after.get('player_count', 1)
-                round_stake = rd_after.get('stake', DEFAULT_STAKE)
-                total_prize = player_count * round_stake * 0.75
                 winner_id = str(chosen_winner.get('user_id'))
                 winning_cartela = int(chosen_winner.get('cartela_number', 0))
-                prize_per_winner = total_prize
-                winner_name = players.get(winner_id, {}).get('name', 'Player')
-                await _db(lambda: db.collection('rounds').document(round_id).update({
-                    'status': 'completed',
-                    'winners': [winner_id],
-                    'winner_name': winner_name,
-                    'winning_cartela': winning_cartela,
-                    'prize_per_winner': prize_per_winner,
-                    'completion_reason': completion_reason,
-                    'completed_at': now,
-                }))
+                completion = await engine.complete_round(
+                    round_id,
+                    int(winner_id),
+                    winning_cartela,
+                    completion_reason or 'smart_single_winner',
+                    len(called_now),
+                )
+                if not completion.get('ok') and not completion.get('already_completed'):
+                    logger.warning(
+                        f"[GameLoop] Winner completion rejected for {round_id}: "
+                        f"{completion.get('error', 'unknown error')}"
+                    )
+                    return
+
+                # The completion transaction is the authority. If another
+                # process won first, use its winner rather than this stale
+                # loop's candidate when finalizing payout.
+                authoritative_ids = completion.get('winner_ids') or [int(winner_id)]
                 await broadcast_event('rounds', round_id)
                 try:
-                    result = await engine.end_round(round_id, [int(winner_id)])
+                    result = await engine.end_round(round_id, authoritative_ids)
                     if isinstance(result, dict) and result.get('error'):
                         logger.error(f"[GameLoop] Payout skipped for {round_id}: {result['error']}")
                         return
                 except Exception as e:
                     logger.error(f"[GameLoop] Error distributing prizes: {e}")
-                for uid in set(list(players.keys()) + [winner_id]):
+                for uid in set(list(players.keys()) + [str(w) for w in authoritative_ids]):
                     try: await broadcast_event('users', str(uid))
                     except: pass
                 # payout_processed already set atomically inside end_round
@@ -1220,6 +1227,20 @@ async def check_bingo(round_id: str, req: BingoCheckRequest, request: Request):
     """Check bingo only for the verified player or an admin/internal caller."""
     user_id = _actor_user_id(request, req.user_id)
     result = await engine.check_bingo(round_id, user_id)
+    return result
+
+
+@app.post("/api/rounds/{round_id}/claim-bingo")
+async def claim_bingo(round_id: str, req: BingoCheckRequest, request: Request):
+    """Atomically validate one card and award the first valid Bingo claim."""
+    user_id = _actor_user_id(request, req.user_id)
+    result = await engine.claim_bingo(round_id, user_id, req.winning_cartela)
+    if result.get('ok') and result.get('winner'):
+        await broadcast_event('rounds', round_id)
+        for uid in result.get('winner_ids', []):
+            await broadcast_event('users', str(uid))
+    if result.get('error') and not result.get('already_completed'):
+        raise HTTPException(status_code=400, detail=result['error'])
     return result
 
 
@@ -2385,32 +2406,62 @@ async def unsubscribe(sid, data):
     room = f"{collection}:{doc_id}" if doc_id else collection
     await sio.leave_room(sid, room)
 
+def _snapshot_fingerprint(collection: str, doc_id: str, exists: bool, data):
+    """Build a stable, bounded-cost identity for an emitted document snapshot."""
+    return json.dumps(
+        {
+            "collection": collection,
+            "id": str(doc_id),
+            "exists": bool(exists),
+            "data": data,
+        },
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
+    )
+
+
 async def broadcast_event(collection: str, doc_id: str):
-    """Emit updated snapshot to all subscribers of this collection/doc."""
+    """Emit one current snapshot, suppressing duplicate observations of one write."""
     room_exact = f"{collection}:{doc_id}"
     room_collection = collection
 
     def _read_doc():
         return db.collection(collection).document(doc_id).get()
 
-    snap = await asyncio.to_thread(_read_doc)
-    payload = {
-        "type": "snapshot",
-        "collection": collection,
-        "id": doc_id,
-        "data": snap.to_dict() if snap.exists else None,
-        "exists": snap.exists
-    }
-    await sio.emit('snapshot', payload, room=room_exact)
+    cache_key = f"{collection}:{doc_id}"
 
-    # For collection-level listeners, only send the changed doc
-    # (client maintains local state from individual snapshots)
-    query_payload = {
-        "type": "query_snapshot",
-        "collection": collection,
-        "docs": [{"id": doc_id, "data": snap.to_dict() if snap.exists else None}]
-    }
-    await sio.emit('query_snapshot', query_payload, room=room_collection)
+    # Direct route broadcasts and the durable event bridge can see the same
+    # committed write. Read only after acquiring the small fanout lock so a
+    # queued older observation cannot emit a stale snapshot after a newer one.
+    async with _realtime_state_lock:
+        snap = await asyncio.to_thread(_read_doc)
+        snapshot_data = snap.to_dict() if snap.exists else None
+        fingerprint = _snapshot_fingerprint(collection, doc_id, snap.exists, snapshot_data)
+        if _last_broadcast_fingerprints.get(cache_key) == fingerprint:
+            return False
+        _last_broadcast_fingerprints[cache_key] = fingerprint
+        while len(_last_broadcast_fingerprints) > _BROADCAST_FINGERPRINT_LIMIT:
+            _last_broadcast_fingerprints.pop(next(iter(_last_broadcast_fingerprints)))
+
+        payload = {
+            "type": "snapshot",
+            "collection": collection,
+            "id": doc_id,
+            "data": snapshot_data,
+            "exists": snap.exists,
+        }
+        await sio.emit('snapshot', payload, room=room_exact)
+
+        # Collection listeners receive only the changed document. The client
+        # applies its own query filters before invoking the listener callback.
+        query_payload = {
+            "type": "query_snapshot",
+            "collection": collection,
+            "docs": [{"id": doc_id, "data": snapshot_data}],
+        }
+        await sio.emit('query_snapshot', query_payload, room=room_collection)
+    return True
 
 async def broadcast_cartelas_update():
     """Safely broadcast cartela pool update to all admin dashboards."""
@@ -2443,31 +2494,59 @@ async def broadcast_cartela_pool(round_id: str):
 
 
 # ─── Background event broadcaster ───
+def _latest_event_cursor():
+    """Return the newest durable event so startup does not replay old history."""
+    sess = SessionLocal()
+    try:
+        event = sess.query(SystemEvent).order_by(
+            SystemEvent.created_at.desc(), SystemEvent.id.desc()
+        ).first()
+        if not event:
+            return None, None
+        return event.created_at, event.id
+    finally:
+        sess.close()
+
+
 async def _event_broadcast_loop():
-    """Poll system_events table and push Socket.IO updates to subscribed clients."""
-    last_id = ""
+    """Bridge writes without direct route broadcasts using an indexed cursor."""
+    last_created_at, last_event_id = await asyncio.to_thread(_latest_event_cursor)
+    poll_interval = max(0.05, float(os.getenv("REALTIME_EVENT_POLL_SECONDS", "0.15")))
     while True:
         try:
-            events = await asyncio.to_thread(_fetch_events, last_id)
+            events = await asyncio.to_thread(
+                _fetch_events,
+                last_created_at,
+                last_event_id,
+            )
             for ev in events:
-                last_id = ev.id
+                last_created_at = ev.created_at
+                last_event_id = ev.id
                 try:
                     await broadcast_event(ev.collection, ev.doc_id)
                 except Exception as ev_err:
                     logger.warning(f"Error broadcasting event {ev.collection}/{ev.doc_id}: {ev_err}")
         except Exception as e:
             logger.warning(f"Error in event broadcast loop: {e}")
-        await asyncio.sleep(0.25)
+        await asyncio.sleep(poll_interval)
 
 
-def _fetch_events(last_id: str):
-    """Synchronous: query SystemEvent table for new events."""
+def _fetch_events(last_created_at=None, last_event_id=None):
+    """Query new events by (created_at, id), never by random UUID ordering alone."""
     sess = SessionLocal()
     try:
         events = sess.query(SystemEvent)
-        if last_id:
-            events = events.filter(SystemEvent.id > last_id)
-        return events.order_by(SystemEvent.created_at).limit(50).all()
+        if last_created_at is not None:
+            events = events.filter(or_(
+                SystemEvent.created_at > last_created_at,
+                and_(
+                    SystemEvent.created_at == last_created_at,
+                    SystemEvent.id > (last_event_id or ""),
+                ),
+            ))
+        return events.order_by(
+            SystemEvent.created_at.asc(), SystemEvent.id.asc()
+        ).limit(100).all()
     finally:
         sess.close()
 

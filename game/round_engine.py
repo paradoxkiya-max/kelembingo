@@ -586,22 +586,196 @@ class RoundEngine:
 
         return {'bingo': len(winning_cartelas) > 0, 'winning_cartelas': winning_cartelas}
 
-    async def end_round(self, round_id: str, winner_ids: List[int]) -> dict:
-        """End the round, distribute prizes.
+    def _winning_cartelas_for_player(self, players: Dict[str, dict], user_id: int,
+                                      called_numbers: List[int]) -> List[int]:
+        """Return this joined player's currently winning cartelas in stable order."""
+        player_info = (players or {}).get(str(user_id))
+        if not player_info:
+            return []
+        called_set = set(called_numbers or [])
+        winning = []
+        for cartela_num in player_info.get('cartelas', []) or []:
+            cartela_doc = self.master_ref.document(str(cartela_num)).get()
+            if not cartela_doc.exists:
+                continue
+            flat = cartela_doc.to_dict().get('cartela', [])
+            if any(all(n in called_set for n in pattern)
+                   for pattern in self.get_cartela_patterns(flat)):
+                winning.append(int(cartela_num))
+        return sorted(set(winning))
 
-        Payout-guarded: each round can be paid out exactly once. The guard
-        relies on the round's `payout_processed` flag plus an in-process lock,
-        which is sufficient because all payout paths (game loop + admin
-        endpoint) run inside the same gateway process.
+    def _complete_sync(self, round_id: str, user_id: int,
+                       winning_cartela: Optional[int] = None,
+                       completion_reason: str = 'bingo_claim',
+                       expected_call_count: Optional[int] = None) -> dict:
+        """Atomically choose one winner for a round; first valid completion wins."""
+        claim_version = 'unknown' if expected_call_count is None else int(expected_call_count)
+        operation_key = (
+            f"round-winner:{round_id}:{user_id}:"
+            f"{winning_cartela if winning_cartela is not None else 'any'}:{claim_version}"
+        )
+
+        def _apply(transaction):
+            round_ref = self.rounds_ref.document(round_id)
+            round_doc = transaction.get(round_ref)
+            if not round_doc.exists:
+                return {'ok': False, 'error': 'Round not found'}
+
+            data = round_doc.to_dict()
+            existing = [str(w) for w in (data.get('winners') or [])]
+            if data.get('status') == 'completed':
+                # Idempotent replay: expose the already authoritative winner so
+                # competing clients never create a second winner.
+                if len(existing) == 1:
+                    return {
+                        'ok': existing[0] == str(user_id),
+                        'winner': existing[0] == str(user_id),
+                        'winner_ids': [int(existing[0])],
+                        'winning_cartela': data.get('winning_cartela'),
+                        'already_completed': True,
+                        'error': None if existing[0] == str(user_id) else 'Another player already won',
+                    }
+                if not existing:
+                    return {
+                        'ok': False,
+                        'winner': False,
+                        'winner_ids': [],
+                        'already_completed': True,
+                        'error': 'Round already completed without a winner',
+                    }
+                return {'ok': False, 'error': 'Round contains invalid multiple winners'}
+            if data.get('status') != 'playing':
+                return {'ok': False, 'error': 'Round is not playing'}
+
+            players = data.get('players', {}) or {}
+            uid_str = str(user_id)
+            if uid_str not in players:
+                return {'ok': False, 'error': 'Player not in round'}
+
+            winning = self._winning_cartelas_for_player(
+                players, user_id, data.get('called_numbers', [])
+            )
+            if winning_cartela is not None:
+                try:
+                    requested_cartela = int(winning_cartela)
+                except (TypeError, ValueError):
+                    return {'ok': False, 'error': 'Invalid cartela number'}
+                if requested_cartela not in winning:
+                    return {'ok': False, 'error': 'Cartela is not a valid winner'}
+                canonical_cartela = requested_cartela
+            elif winning:
+                canonical_cartela = winning[0]
+            else:
+                return {'ok': False, 'error': 'Bingo is not valid yet'}
+
+            now = datetime.now(tz=timezone.utc)
+            player_name = players.get(uid_str, {}).get('name', 'Player')
+            player_count = int(data.get('player_count', 0) or 0)
+            stake = float(data.get('stake', DEFAULT_STAKE) or DEFAULT_STAKE)
+            total_pool = player_count * stake
+            transaction.update(round_ref, {
+                'status': 'completed',
+                'winners': [uid_str],
+                'winner_name': player_name,
+                'winning_cartela': canonical_cartela,
+                'prize_per_winner': total_pool * 0.75,
+                'admin_profit': total_pool * 0.25,
+                'completion_reason': completion_reason,
+                'completed_at': now,
+            })
+            return {
+                'ok': True,
+                'winner': True,
+                'winner_ids': [int(user_id)],
+                'winning_cartela': canonical_cartela,
+                'already_completed': False,
+            }
+
+        return run_idempotent(
+            operation_key,
+            'round_winner_selection',
+            _apply,
+            lock_key=f'round:{round_id}',
+        )
+
+    async def complete_round(self, round_id: str, user_id: int,
+                             winning_cartela: Optional[int] = None,
+                             completion_reason: str = 'bingo_claim',
+                             expected_call_count: Optional[int] = None) -> dict:
+        """Atomically complete a round with exactly one validated winner."""
+        if expected_call_count is None:
+            snapshot = await asyncio.to_thread(self.rounds_ref.document(round_id).get)
+            if snapshot.exists:
+                expected_call_count = len(snapshot.to_dict().get('called_numbers', []) or [])
+        return await asyncio.to_thread(
+            self._complete_sync, round_id, user_id, winning_cartela,
+            completion_reason, expected_call_count
+        )
+
+    async def claim_bingo(self, round_id: str, user_id: int,
+                          winning_cartela: Optional[int] = None) -> dict:
+        """Validate and claim Bingo; a losing claim never consumes the winner key."""
+        round_doc = await asyncio.to_thread(self.rounds_ref.document(round_id).get)
+        if not round_doc.exists:
+            return {'ok': False, 'winner': False, 'error': 'Round not found'}
+        data = round_doc.to_dict()
+        if data.get('status') == 'completed':
+            winners = [str(w) for w in (data.get('winners') or [])]
+            return {
+                'ok': bool(winners and winners[0] == str(user_id)),
+                'winner': bool(winners and winners[0] == str(user_id)),
+                'winner_ids': [int(winners[0])] if len(winners) == 1 else [],
+                'winning_cartela': data.get('winning_cartela'),
+                'error': None if winners and winners[0] == str(user_id) else 'Another player already won',
+            }
+        current_winners = self._winning_cartelas_for_player(
+            data.get('players', {}) or {}, user_id, data.get('called_numbers', [])
+        )
+        if winning_cartela is not None:
+            try:
+                if int(winning_cartela) not in current_winners:
+                    return {'ok': False, 'winner': False, 'error': 'Cartela is not a valid winner'}
+            except (TypeError, ValueError):
+                return {'ok': False, 'winner': False, 'error': 'Invalid cartela number'}
+        elif not current_winners:
+            return {'ok': False, 'winner': False, 'error': 'Bingo is not valid yet'}
+        result = await self.complete_round(
+            round_id, user_id, winning_cartela, 'bingo_claim', len(data.get('called_numbers', []) or [])
+        )
+        if not result.get('ok'):
+            return result
+        payout = await self.end_round(round_id, result.get('winner_ids', []))
+        if isinstance(payout, dict) and payout.get('error'):
+            return {'ok': False, 'winner': False, 'error': payout['error']}
+        return {**result, 'payout_processed': True}
+
+    async def end_round(self, round_id: str, winner_ids: List[int]) -> dict:
+        """End the round and distribute one authoritative winner payout.
+
+        Multiple distinct winner IDs are rejected. Winner selection must happen
+        through ``complete_round`` so a manual or stale caller cannot bypass
+        called-number validation.
         """
+        if len({str(w) for w in (winner_ids or [])}) != 1:
+            return {'error': 'Exactly one winner is required'}
+        if winner_ids:
+            completion = await self.complete_round(
+                round_id, int(winner_ids[0]), None, 'manual_or_engine_completion'
+            )
+            if not completion.get('ok'):
+                return completion
+            winner_ids = completion.get('winner_ids') or winner_ids[:1]
         if round_id not in self._round_locks:
             self._round_locks[round_id] = asyncio.Lock()
-
         async with self._round_locks[round_id]:
             return await asyncio.to_thread(self._end_sync, round_id, winner_ids)
 
     def _end_sync(self, round_id: str, winner_ids: List[int]) -> dict:
-        """Apply one payout atomically and return the same result on retry."""
+        """Apply one payout atomically and return the same result on retry.
+
+        The caller holds the in-process round lock; ``run_idempotent`` below
+        provides the cross-process lock and exactly-once database guard.
+        """
         operation_key = f"round-payout:{round_id}"
 
         def _apply(transaction):

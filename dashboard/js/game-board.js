@@ -498,18 +498,43 @@ function _processAnnounceQueue() {
 // ==================== BINGO CHECK ====================
 var _bingoDetected = false;
 async function checkMyBingo() {
-    if (_bingoDetected) return;
+    if (_bingoDetected || !currentRoundId || !currentUser) return;
     try {
         var calledArr = Array.from(calledNumbers);
         for (var cartelaNum in myCartelas) {
-            if (myCartelas.hasOwnProperty(cartelaNum)) {
-                if (checkBingoLocal(myCartelas[cartelaNum], calledArr)) {
-                    _bingoDetected = true;
-                    playBingoAnnouncement(cartelaNum);
-                    showToast('BINGO! Waiting for confirmation...');
-                    return;
-                }
+            if (!myCartelas.hasOwnProperty(cartelaNum)) continue;
+            if (!checkBingoLocal(myCartelas[cartelaNum], calledArr)) continue;
+
+            _bingoDetected = true;
+            playBingoAnnouncement(cartelaNum);
+            showToast('BINGO found — confirming with server...');
+
+            // Local detection is only a UX hint. The gateway validates the
+            // current called numbers and atomically accepts the first winner.
+            if (typeof playerApi !== 'function') {
+                _bingoDetected = false;
+                return;
             }
+            try {
+                var response = await playerApi(
+                    'POST',
+                    '/api/rounds/' + encodeURIComponent(currentRoundId) + '/claim-bingo',
+                    { user_id: currentUser.id, winning_cartela: Number(cartelaNum) }
+                );
+                var result = await response.json().catch(function() { return {}; });
+                if (!response.ok || !result.ok || !result.winner) {
+                    _bingoDetected = false;
+                    if (result.error && result.error !== 'Another player already won') {
+                        showToast(result.error);
+                    }
+                } else {
+                    showToast('BINGO confirmed!');
+                }
+            } catch (claimErr) {
+                _bingoDetected = false;
+                console.warn('Authoritative Bingo claim failed:', claimErr);
+            }
+            return;
         }
     } catch (err) {
         console.error('checkMyBingo unexpected error:', err);
@@ -548,7 +573,7 @@ function handleRoundCompleted(data) {
     var isWinner = (data.winners || []).includes(uidStr);
     var noWinner = !data.winners || data.winners.length === 0;
 
-    playWinSound();
+    if (isWinner) playWinSound();
 
     if (noWinner) {
         var winnerName = data.winner_name || '';
@@ -567,6 +592,8 @@ function handleRoundCompleted(data) {
 }
 
 function showWinModal(data, isWinner) {
+    var title = document.getElementById('win-modal-title');
+    if (title) title.textContent = isWinner ? 'BINGO!' : 'ROUND RESULT';
     var wn = document.getElementById('winner-name');
     var wc = document.getElementById('winner-cartela');
     var wp = document.getElementById('winner-prize');
