@@ -635,6 +635,53 @@ class DepositSubmitRequest(BaseModel):
 # ═══════════════════════════════════════════════════════════════
 # Server-Side Game Loop
 # ═══════════════════════════════════════════════════════════════
+async def _finalize_pending_selections(round_id: str, round_data: dict) -> None:
+    """Durably join the cartelas a player already selected before closing a round.
+
+    The selection UI publishes each tap to ``pending_selections``. At the
+    deadline this gateway-side finalizer is the source of truth, so a slow
+    Telegram WebView or an in-flight client request cannot strand a selected
+    player on a completed round.
+    """
+    pending = round_data.get('pending_selections') or {}
+    if not isinstance(pending, dict):
+        return
+    for user_id_text, numbers in pending.items():
+        try:
+            user_id = int(user_id_text)
+            selected = [int(number) for number in (numbers or [])]
+        except (TypeError, ValueError):
+            continue
+        selected = list(dict.fromkeys(number for number in selected if 1 <= number <= 500))[:2]
+        if not selected:
+            continue
+        user = await _db(lambda: _read_user_sync(user_id))
+        user_name = (user or {}).get('first_name') or (user or {}).get('username') or 'Player'
+        result = await engine.join_round(round_id, user_id, selected, user_name)
+        if result.get('error') and result.get('error') != 'You already joined this round':
+            logger.info('[GameLoop] pending join skipped for round %s user %s: %s', round_id, user_id, result.get('error'))
+
+
+async def _start_playing_round(round_id: str, round_data: dict) -> bool:
+    """Transition a selecting round with players to playing and broadcast once."""
+    player_count = int(round_data.get('player_count', 0) or 0)
+    if player_count <= 0:
+        return False
+    now = datetime.now(tz=timezone.utc)
+    round_stake = round_data.get('stake', DEFAULT_STAKE)
+    total_pool = player_count * round_stake
+    derash = total_pool * 0.75
+    await _db(lambda: db.collection('rounds').document(round_id).update({
+        'status': 'playing',
+        'derash': derash,
+        'game_started_at': now,
+        'next_number_at': now + timedelta(seconds=NUMBER_CALL_INTERVAL),
+        'pending_selections': {},
+    }))
+    await broadcast_event('rounds', round_id)
+    return True
+
+
 async def _game_loop(round_id: str):
     """Background task: wait for selection deadline, then start if players exist."""
     try:
@@ -667,51 +714,38 @@ async def _game_loop(round_id: str):
                 if dl_dt.tzinfo is None:
                     dl_dt = dl_dt.replace(tzinfo=timezone.utc)
                 
-                # Give an extra 5 seconds grace period for large batches of queued auto-join HTTP requests to finish executing
-                if datetime.now(tz=timezone.utc) >= dl_dt + timedelta(seconds=5):
-                    # Timer expired — start game if players exist
-                    player_count = data.get('player_count', 0)
-                    if player_count > 0:
-                        now = datetime.now(tz=timezone.utc)
-                        round_stake = data.get('stake', DEFAULT_STAKE)
-                        total_pool = player_count * round_stake
-                        derash = total_pool * 0.75
-                        await _db(lambda: db.collection('rounds').document(round_id).update({
-                            'status': 'playing',
-                            'derash': derash,
-                            'game_started_at': now,
-                            'next_number_at': now + timedelta(seconds=NUMBER_CALL_INTERVAL),
-                            'pending_selections': {},
-                        }))
-                        await broadcast_event('rounds', round_id)
+                if datetime.now(tz=timezone.utc) >= dl_dt:
+                    # Finalize selections on the gateway rather than waiting for
+                    # slow Telegram WebView requests to reach /join after 0s.
+                    await _finalize_pending_selections(round_id, data)
+                    refreshed = await _db(lambda: db.collection('rounds').document(round_id).get())
+                    if not refreshed.exists:
+                        return
+                    refreshed_data = refreshed.to_dict()
+                    if refreshed_data.get('status') != 'selecting':
+                        continue
+                    if await _start_playing_round(round_id, refreshed_data):
                         break
-                    else:
-                        # Grace period: wait 5s for late joins before cancelling
-                        await asyncio.sleep(5)
-                        recheck = await _db(lambda: db.collection('rounds').document(round_id).get())
-                        if not recheck.exists:
-                            return
-                        recheck_data = recheck.to_dict()
-                        if recheck_data.get('status') != 'selecting':
-                            # Status changed (e.g. player joined via transaction), re-enter loop
-                            continue
-                        recheck_pc = recheck_data.get('player_count', 0)
-                        if recheck_pc > 0:
-                            # Player joined during grace period — start the game
-                            now = datetime.now(tz=timezone.utc)
-                            round_stake = recheck_data.get('stake', DEFAULT_STAKE)
-                            total_pool = recheck_pc * round_stake
-                            derash = total_pool * 0.75
-                            await _db(lambda: db.collection('rounds').document(round_id).update({
-                                'status': 'playing',
-                                'derash': derash,
-                                'game_started_at': now,
-                                'next_number_at': now + timedelta(seconds=NUMBER_CALL_INTERVAL),
-                                'pending_selections': {},
-                            }))
-                            await broadcast_event('rounds', round_id)
-                            break
-                        # Still no players — cancel
+                    # A short final grace period covers a tap arriving at the
+                    # exact deadline without adding the former 10-second delay.
+                    await asyncio.sleep(1)
+                    recheck = await _db(lambda: db.collection('rounds').document(round_id).get())
+                    if not recheck.exists:
+                        return
+                    recheck_data = recheck.to_dict()
+                    if recheck_data.get('status') != 'selecting':
+                        continue
+                    await _finalize_pending_selections(round_id, recheck_data)
+                    final_check = await _db(lambda: db.collection('rounds').document(round_id).get())
+                    if not final_check.exists:
+                        return
+                    final_data = final_check.to_dict()
+                    if final_data.get('status') != 'selecting':
+                        continue
+                    if await _start_playing_round(round_id, final_data):
+                        break
+                    # Still no players — cancel
+                    if int(final_data.get('player_count', 0) or 0) <= 0:
                         await _db(lambda: db.collection('rounds').document(round_id).update({
                             'status': 'completed',
                             'winners': [],
@@ -1103,6 +1137,7 @@ async def join_round(round_id: str, req: JoinRoundRequest, request: Request):
     )
     if 'error' in result:
         raise HTTPException(status_code=400, detail=result['error'])
+    _start_game_loop(round_id)
     # Broadcast real-time cartela pool update
     await broadcast_cartela_pool(round_id)
     await broadcast_event('rounds', round_id)
