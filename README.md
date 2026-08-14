@@ -51,13 +51,13 @@ site).
 
 ```
 ┌──────────────────────────────────────────┐   ┌─────────────────────────┐
-│      Render Cloud — Docker container       │   │   Vercel (static site) │
+│      Render Cloud — Docker container       │   │   Render (static site) │
 │                                             │   │                         │
-│  run_bots.py  (multiprocessing launcher)     │   │  dashboard/             │
-│  ├─ Process: Game Bot          bot.py        │   │  ├─ index.html (admin) │
-│  ├─ Process: Admin Bot         admin_bot.py  │   │  ├─ game.html (game)   │
-│  ├─ Process: Support Bot       support_bot.py│   │  ├─ env.js             │
-│  ├─ Process: Admin Support Bot ...           │   │  └─ js/...             │
+│  run_bots.py  (multiprocessing launcher)     │   │  dashboard-react/       │
+│  ├─ Process: Game Bot          bot.py        │   │  ├─ React + Tailwind    │
+│  ├─ Process: Admin Bot         admin_bot.py  │   │  ├─ Socket.IO client    │
+│  ├─ Process: Support Bot       support_bot.py│   │  └─ static build        │
+│  ├─ Process: Admin Support Bot ...           │   │                         │
 │  └─ Main:    FastAPI + Socket.IO             │   │                         │
 │                 ├─ REST API                  │   │   env.js →             │
 │                 ├─ Socket.IO events          │   │   window.BACKEND_URL   │
@@ -75,10 +75,10 @@ site).
 
 - **Backend** (Render, `RENDER_API_ONLY=true`): bots + API + game loop, no
   static file serving (saves ~80 MB RAM on free plan).
-- **Frontend** (Vercel, `dashboard/` as root): static site with `env.js`
-  auto-detecting the backend URL (`BACKEND_URL`).
+- **Frontend** (Render static service, `dashboard-react/` as root): Vite-built
+  React/Tailwind app using `VITE_GATEWAY_URL` or the browser origin.
 - All bots + API share **one database** via SQLAlchemy.
-- `RENDER_API_ONLY` is unset locally so the API also serves the dashboard.
+- The gateway never serves frontend files; it remains API + Socket.IO + game engine.
 
 ---
 
@@ -90,8 +90,8 @@ site).
 | Real-time  | python-socketio v5, Socket.IO JS v4 |
 | Database   | SQLite (dev) / PostgreSQL (prod) via SQLAlchemy |
 | Telegram   | python-telegram-bot v21+ |
-| Frontend   | Vanilla JS + TailwindCSS (CDN, no build step) |
-| Deployment | Docker on Render (backend) + Vercel (frontend) |
+| Frontend   | React 19 + TypeScript + TailwindCSS 4 + Socket.IO client |
+| Deployment | Docker on Render (gateway/bots) + Render static service (frontend) |
 
 ---
 
@@ -128,18 +128,10 @@ kelembingo/
 │   ├── withdraw_handler.py
 │   └── bot_content.py     # Editable bot messages + config defaults
 │
-├── dashboard/             # Web dashboard + game Mini App (deployed to Vercel)
-│   ├── vercel.json        # Vercel config: rewrites, favicon redirect
-│   ├── index.html         # Admin dashboard
-│   ├── game.html          # Player game board / Mini App
-│   ├── login.html         # Admin login page
-│   ├── env.js             # Auto-detects backend URL (window.BACKEND_URL)
-│   ├── audio/             # Sound effects (called number, bingo, winner)
-│   ├── img/               # SVG assets (favicon, etc.)
-│   ├── js/admin/          # Dashboard modules (users, payments, backup, …)
-│   ├── js/firebase.js     # Client-side Firestore mock (REST + Socket.IO bridge)
-│   ├── js/game-board.js   # Game board UI with auto-mark toggle
-│   └── js/wallet.js       # Deposit/withdraw UI
+├── dashboard-react/       # React player Mini App + admin console
+│   ├── client/src/        # Pages, contexts, gateway, realtime, and UI
+│   ├── package.json       # Vite/Tailwind build contract
+│   └── RENDER-FRONTEND-MIGRATION.md
 │
 └── tests/                 # 48 tests + Monte Carlo (900 rounds)
 ```
@@ -154,7 +146,7 @@ but **no real Firebase is used**. Instead:
 - `firestore_db.py` implements `MockFirestoreClient`, backed by a single
   SQLAlchemy table (`firestore_documents`) storing `(collection, doc_id, json)`.
 - `config.py` injects mock `firebase_admin` modules so existing imports work.
-- The frontend `dashboard/js/firebase.js` mirrors the same API in the browser,
+- The React gateway/realtime client mirrors the same API in the browser,
   translating calls into REST (`/api/db/...`) and Socket.IO subscriptions.
 
 This means every database read/write flows through the FastAPI backend into SQL.
@@ -286,7 +278,7 @@ docker compose up --build
 
 ## Admin Dashboard
 
-Served at the Vercel URL (default `https://kelembingo.vercel.app`). Sections:
+Served by the Render static frontend service under `/admin`. Sections:
 
 - **Dashboard** — live stats.
 - **Users** — search, view, adjust balance, ban/unban.
@@ -336,11 +328,13 @@ The repo ships a `render.yaml` and a `Dockerfile`. On Render:
 3. Deploy. The container runs `python run_bots.py`.
 4. Health check: `GET /api/health`.
 
-### Frontend (Vercel)
+### Frontend (Render static service)
 
-1. Connect `dashboard/` as a Vercel project (root directory: `dashboard`).
-2. No build step — Vercel serves the static files directly.
-3. `env.js` auto-detects the backend URL from `window.location`.
+1. Connect this repository and use branch `react-rebuild` for verification.
+2. Set the root directory to `dashboard-react`.
+3. Build with `pnpm install --frozen-lockfile && pnpm build`.
+4. Publish `dist/public` as the static directory.
+5. Set `VITE_GATEWAY_URL` to the existing gateway URL, or rely on the browser-origin fallback.
 
 ### Data persistence
 

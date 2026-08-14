@@ -92,8 +92,8 @@ with tempfile.TemporaryDirectory() as tmp:
 
 admin_source = (REPO / "api" / "admin_api.py").read_text()
 round_source = (REPO / "game" / "round_engine.py").read_text()
-firebase_source = (REPO / "dashboard" / "js" / "firebase.js").read_text()
-game_source = (REPO / "dashboard" / "js" / "game-board.js").read_text()
+realtime_source = (REPO / "dashboard-react" / "client" / "src" / "lib" / "realtime.ts").read_text()
+game_source = (REPO / "dashboard-react" / "client" / "src" / "pages" / "GameBoard.tsx").read_text()
 
 assert "SystemEvent.id > last_id" not in admin_source
 assert "_latest_event_cursor" in admin_source
@@ -101,8 +101,9 @@ assert "from sqlalchemy import and_, or_, text as sql_text" in admin_source
 assert "_last_broadcast_fingerprints" in admin_source
 assert "Exactly one winner is required" in round_source
 assert "claim-bingo" in admin_source
-assert "_registerSocketSubscription" in firebase_source
-assert "self._filters.every" in firebase_source
-assert "claim-bingo" in game_source
+assert "subscribe" in realtime_source
+assert "reconnection" in realtime_source
+assert "unsubscribe" in realtime_source
+assert "claimBingo" in game_source
 
 print("realtime and single-winner hardening regression check: PASS")

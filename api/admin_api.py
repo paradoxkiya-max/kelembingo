@@ -10,8 +10,7 @@ import hashlib
 import secrets as _secrets
 import base64
 from fastapi import FastAPI, HTTPException, Query as FastAPIQuery, Body, Request
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response, JSONResponse
+from fastapi.responses import Response, JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional
 import json
@@ -2759,59 +2758,10 @@ async def gateway_db_query_collection(
 # (startup merged into start_background_monitor above)
 
 
-# ─── Dashboard & game (served from same service as API + bots) ───
-# Set RENDER_API_ONLY=true to skip static files (saves RAM when frontend is on a separate service).
-DASHBOARD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dashboard")
-
-if not os.environ.get("RENDER_API_ONLY"):
-
-    @app.get("/")
-    async def dashboard_home():
-        return FileResponse(os.path.join(DASHBOARD_DIR, "index.html"))
-
-
-    @app.get("/index.html")
-    async def dashboard_home_alias():
-        return FileResponse(os.path.join(DASHBOARD_DIR, "index.html"))
-
-
-    @app.get("/game")
-    async def game_page():
-        return FileResponse(os.path.join(DASHBOARD_DIR, "game.html"))
-
-
-    @app.get("/game.html")
-    async def game_page_alias():
-        return FileResponse(os.path.join(DASHBOARD_DIR, "game.html"))
-
-
-    @app.get("/login")
-    async def login_page():
-        return FileResponse(os.path.join(DASHBOARD_DIR, "login.html"))
-
-
-    @app.get("/login.html")
-    async def login_page_alias():
-        return FileResponse(os.path.join(DASHBOARD_DIR, "login.html"))
-
-
-    @app.get("/favicon.ico", include_in_schema=False)
-    async def favicon():
-        return Response(status_code=204)
-
-
-    if os.path.isdir(os.path.join(DASHBOARD_DIR, "css")):
-        app.mount("/css", StaticFiles(directory=os.path.join(DASHBOARD_DIR, "css")), name="css")
-    if os.path.isdir(os.path.join(DASHBOARD_DIR, "js")):
-        app.mount("/js", StaticFiles(directory=os.path.join(DASHBOARD_DIR, "js")), name="js")
-    if os.path.isdir(os.path.join(DASHBOARD_DIR, "pages")):
-        app.mount("/pages", StaticFiles(directory=os.path.join(DASHBOARD_DIR, "pages")), name="pages")
-    if os.path.isdir(os.path.join(DASHBOARD_DIR, "components")):
-        app.mount("/components", StaticFiles(directory=os.path.join(DASHBOARD_DIR, "components")), name="components")
-    if os.path.isdir(os.path.join(DASHBOARD_DIR, "audio")):
-        app.mount("/audio", StaticFiles(directory=os.path.join(DASHBOARD_DIR, "audio")), name="audio")
-else:
-    logger.info("🔒 RENDER_API_ONLY=true — static file serving disabled")
+# ─── Frontend separation ───────────────────────────────────────────────
+# The player/admin UI is now built by the separate React static service.
+# The gateway intentionally does not serve legacy dashboard files or UI assets.
+logger.info("🔒 React frontend is served by the separate static service; gateway UI routes are disabled")
 
 
 if __name__ == "__main__":

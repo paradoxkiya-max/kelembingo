@@ -20,8 +20,20 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Set up Node and pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.4.1
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: dashboard-react/pnpm-lock.yaml
       - name: Install dependencies
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+      - name: Install React frontend dependencies
+        run: pnpm --dir dashboard-react install --frozen-lockfile
       - name: Validate gateway modules
         run: python -m py_compile startup_state.py run_gateway.py api/admin_api.py firestore_db.py
       - name: Verify startup readiness gate
@@ -29,12 +41,16 @@ jobs:
       - name: Verify SQLite query compatibility
         run: python tools/test_sqlite_query_adapter.py
       - name: Verify mobile game timer regression
-        run: node --check dashboard/js/game-board.js && python tools/test_game_timer_regression.py && python tools/test_timer_schedule.py
+        run: python tools/test_game_timer_regression.py && python tools/test_timer_schedule.py
       - name: Verify production database guard
         run: python tools/test_database_config_guard.py
       - name: Verify realtime and single-winner hardening
-        run: node --check dashboard/js/firebase.js && node --check dashboard/js/game-board.js && python tools/test_realtime_winner_hardening.py
+        run: python tools/test_realtime_winner_hardening.py
       - name: Verify stake-selection performance path
-        run: node --check dashboard/js/page-loader.js && node --check dashboard/js/auth.js && node --check dashboard/js/card-select.js && node --check dashboard/js/rules.js && python tools/test_stake_selection_performance.py && python tools/test_public_stats_helper.py
+        run: python tools/test_stake_selection_performance.py && python tools/test_public_stats_helper.py
       - name: Verify payment UI hardening
-        run: node --check dashboard/js/wallet.js && node --check dashboard/js/firebase.js && python tools/test_payment_ui_hardening.py
+        run: python tools/test_payment_ui_hardening.py
+      - name: Verify Derash display contract
+        run: python tools/test_derash_display_accuracy.py
+      - name: Type-check and build React frontend
+        run: pnpm --dir dashboard-react check && pnpm --dir dashboard-react build
