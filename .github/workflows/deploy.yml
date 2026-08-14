@@ -52,5 +52,7 @@ jobs:
         run: python tools/test_payment_ui_hardening.py
       - name: Verify Derash display contract
         run: python tools/test_derash_display_accuracy.py
+      - name: Verify separate admin and player history contract
+        run: python tools/test_player_history_contract.py
       - name: Type-check and build React frontend
         run: pnpm --dir dashboard-react check && pnpm --dir dashboard-react build
