@@ -157,17 +157,16 @@ class RoundEngine:
     # Round Lifecycle
     # ═══════════════════════════════════════════════════════════════
     async def get_active_round(self, stake: int = DEFAULT_STAKE) -> Optional[dict]:
-        """Find the current active round (selecting or playing) for a given stake."""
-        for status in ['selecting', 'playing']:
-            docs = list(self.rounds_ref
-                       .where('status', '==', status)
-                       .where('stake', '==', stake)
-                       .order_by('created_at', 'DESCENDING')
-                       .limit(1)
-                       .get())
-            if docs:
-                doc = docs[0]
-                return {'id': doc.id, **doc.to_dict()}
+        """Find the newest selecting/playing round with one database query."""
+        docs = list(self.rounds_ref
+                   .where('status', 'in', ['selecting', 'playing'])
+                   .where('stake', '==', stake)
+                   .order_by('created_at', 'DESCENDING')
+                   .limit(1)
+                   .get())
+        if docs:
+            doc = docs[0]
+            return {'id': doc.id, **doc.to_dict()}
         return None
 
     async def create_round(self, stake: int = DEFAULT_STAKE) -> dict:
