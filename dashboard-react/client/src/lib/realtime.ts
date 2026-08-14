@@ -3,7 +3,7 @@
 import { io, type Socket } from "socket.io-client";
 import { GATEWAY_URL, gatewayFetch, type Round } from "@/lib/gateway";
 
-type SnapshotMessage = { collection?: string; id?: string; data?: unknown; exists?: boolean };
+type SnapshotMessage = { collection?: string; id?: string; round_id?: string; type?: string; data?: unknown; exists?: boolean; taken_cartelas?: number[]; player_count?: number; pending_selections?: Record<string, number[]> };
 type Listener = (value: Round | null) => void;
 type Subscription = { collection: string; doc_id?: string; player_token?: string };
 
@@ -27,7 +27,7 @@ class RoomManager {
   private dispatch(event: string, message: SnapshotMessage) {
     if (event === "snapshot" && message.collection !== "rounds") return;
     if (event === "cartela_pool" && message.collection && message.collection !== "rounds") return;
-    const id = message.id || String((message.data as { id?: string } | undefined)?.id || "");
+    const id = message.id || message.round_id || String((message.data as { id?: string } | undefined)?.id || "");
     Array.from(this.rooms.entries()).forEach(([key, room]) => { if (key !== JSON.stringify({ collection: "rounds", doc_id: id, player_token: room.data.player_token })) return; Array.from(room.listeners).forEach((listener) => listener(message)); });
   }
 
@@ -45,8 +45,14 @@ export const roomManager = new RoomManager();
 export function observeRound(roundId: string, listener: Listener) {
   let loaded = false; let queued: SnapshotMessage | null = null; let last = "";
   const deliver = (data: Round | null) => { const fingerprint = JSON.stringify(data); if (fingerprint === last) return; last = fingerprint; listener(data); };
-  const handle = (message: SnapshotMessage) => { const payload = message.data && typeof message.data === "object" ? message.data as Round : null; if (!loaded) queued = message; else deliver(message.exists === false ? null : payload); };
+  const handle = (message: SnapshotMessage) => { if (message.type === "cartela_pool") return; const payload = message.data && typeof message.data === "object" ? message.data as Round : null; if (!loaded) queued = message; else deliver(message.exists === false ? null : payload); };
   const unsubscribe = roomManager.subscribeRound(roundId, handle);
   gatewayFetch<{ id?: string; data?: Round }>(`/api/db/rounds/${encodeURIComponent(roundId)}`).then((response) => { loaded = true; deliver(response.data || response as unknown as Round); if (queued) { const latest = queued; queued = null; deliver(latest.exists === false ? null : latest.data as Round); } }).catch(() => { loaded = true; });
   return unsubscribe;
+}
+
+export function observeCartelaPool(roundId: string, listener: (message: SnapshotMessage) => void) {
+  return roomManager.subscribeRound(roundId, (message) => {
+    if (message.type === "cartela_pool" || message.round_id === roundId) listener(message);
+  });
 }
