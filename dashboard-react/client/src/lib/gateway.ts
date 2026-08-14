@@ -4,6 +4,31 @@ export const GATEWAY_URL = (import.meta.env.VITE_GATEWAY_URL || "https://kelembi
 
 export type GatewayError = Error & { status?: number; code?: string };
 
+export function formatGatewayError(value: unknown, fallback = "Request failed", depth = 0): string {
+  if (depth > 4 || value === null || value === undefined) return fallback;
+  if (value instanceof Error) return value.message || fallback;
+  if (typeof value === "string") return value.trim() || fallback;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) {
+    const messages = value.map((item) => formatGatewayError(item, "", depth + 1)).filter(Boolean);
+    return messages.join("; ") || fallback;
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    for (const key of ["message", "detail", "error", "reason", "msg", "description"]) {
+      if (record[key] !== undefined && record[key] !== value) {
+        const message = formatGatewayError(record[key], "", depth + 1);
+        if (message) return message;
+      }
+    }
+    try {
+      const compact = JSON.stringify(value);
+      if (compact && compact !== "{}") return compact;
+    } catch { /* fall through to the safe fallback */ }
+  }
+  return fallback;
+}
+
 function playerToken() {
   return window.localStorage.getItem("kelembingo.playerToken") || "";
 }
@@ -19,11 +44,7 @@ export async function gatewayFetch<T>(path: string, init: RequestInit = {}): Pro
   let payload: unknown = null;
   try { payload = raw ? JSON.parse(raw) : null; } catch { payload = raw; }
   if (!response.ok) {
-    const message = typeof payload === "object" && payload && "detail" in payload
-      ? String((payload as { detail?: unknown }).detail)
-      : typeof payload === "object" && payload && "error" in payload
-        ? String((payload as { error?: unknown }).error)
-        : `Gateway request failed (${response.status})`;
+    const message = formatGatewayError(payload, `Gateway request failed (${response.status})`);
     const error = new Error(message) as GatewayError;
     error.status = response.status;
     if (typeof payload === "object" && payload && "code" in payload) error.code = String((payload as { code?: unknown }).code);
@@ -55,8 +76,8 @@ export const playerApi = {
   unselectCartela: (roundId: string, userId: string | number, cartelaNumber: number) => gatewayFetch<{ ok: boolean }>(`/api/rounds/${encodeURIComponent(roundId)}/unselect`, { method: "POST", body: JSON.stringify({ user_id: Number(userId), cartela_number: cartelaNumber }) }),
   claimBingo: (roundId: string, userId: string | number, winningCartela: number) => gatewayFetch<{ ok?: boolean; winner?: boolean; prize_per_winner?: number; already_completed?: boolean }>(`/api/rounds/${encodeURIComponent(roundId)}/claim-bingo`, { method: "POST", body: JSON.stringify({ user_id: Number(userId), winning_cartela: winningCartela }) }),
   depositConfig: (userId: string | number) => gatewayFetch<DepositConfig>(`/api/deposits/config/${encodeURIComponent(String(userId))}`),
-  submitDeposit: (body: { telebirr_name: string; amount: number; transaction_id: string }) => gatewayFetch<{ ok?: boolean }>("/api/deposits/submit", { method: "POST", body: JSON.stringify(body) }),
-  createWithdrawal: (body: { amount: number; phone: string; telebirr_name: string }, key: string) => gatewayFetch<{ ok?: boolean; error?: string; min?: number }>("/api/withdrawals/create", { method: "POST", headers: { "X-Idempotency-Key": key }, body: JSON.stringify(body) }),
+  submitDeposit: (body: { telebirr_name: string; amount: number; transaction_id: string }) => gatewayFetch<{ ok?: boolean; deposit_id?: string; status?: string; message?: string }>("/api/deposits/submit", { method: "POST", body: JSON.stringify(body) }),
+  createWithdrawal: (body: { amount: number; phone: string; telebirr_name: string }, key: string) => gatewayFetch<{ ok?: boolean; error?: unknown; message?: unknown; min?: number }>("/api/withdrawals/create", { method: "POST", headers: { "X-Idempotency-Key": key }, body: JSON.stringify(body) }),
   deposits: (userId: string | number) => gatewayFetch<Transaction[]>(`/api/db/deposits?filters=${encodeURIComponent(JSON.stringify([["userId", "==", String(userId)]]))}&order_by=createdAt&order_dir=DESCENDING&limit_n=20`),
   withdrawals: (userId: string | number) => gatewayFetch<Transaction[]>(`/api/db/withdrawals?filters=${encodeURIComponent(JSON.stringify([["userId", "==", String(userId)]]))}&order_by=createdAt&order_dir=DESCENDING&limit_n=20`),
 };
