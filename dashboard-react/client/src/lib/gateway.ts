@@ -32,7 +32,7 @@ export async function gatewayFetch<T>(path: string, init: RequestInit = {}): Pro
   return payload as T;
 }
 
-export type Player = { user_id?: string | number; first_name?: string; username?: string; phone?: string; telebirr_name?: string; play_wallet?: number | { value?: number }; bonus_wallet?: number | { value?: number }; wins?: number; total_games?: number; games_played?: number; is_playing?: boolean; status?: string };
+export type Player = { id?: string | number; user_id?: string | number; first_name?: string; username?: string; phone?: string; telebirr_name?: string; play_wallet?: number | { value?: number }; bonus_wallet?: number | { value?: number }; wins?: number; total_games?: number; games_played?: number; is_playing?: boolean; status?: string };
 export type PublicStats = { active_cartelas: number; games_played: number; winners_today: number };
 export type Round = { id?: string; round_id?: string; status?: string; stake?: number; player_count?: number; derash?: number; called_numbers?: number[]; winners?: string[]; prize_per_winner?: number; created_at?: string | number; completed_at?: string | number; game_started_at?: string | number; next_number_at?: string | number; selection_deadline?: string | number; taken_cartelas?: number[]; players?: Record<string, { cartelas?: number[]; name?: string }> };
 export type Cartela = { number: number; data?: number[][]; grid?: number[][]; taken?: boolean; status?: string };
@@ -43,17 +43,17 @@ export const playerApi = {
   authenticate: (initData: string) => gatewayFetch<{ user: Player; player_token?: string; token?: string }>("/api/player/auth", { method: "POST", body: JSON.stringify({ initData }) }),
   reconcile: () => gatewayFetch<Player>("/api/player/reconcile-state", { method: "POST" }),
   stats: () => gatewayFetch<PublicStats>("/api/public/stats"),
-  time: () => gatewayFetch<{ server_time: number }>("/api/time"),
+  time: () => gatewayFetch<{ iso: string }>("/api/time"),
   history: () => gatewayFetch<Round[]>("/api/rounds?status=completed&limit=50"),
   activeRounds: () => gatewayFetch<{ round: Round | null }>("/api/rounds/active"),
   round: (roundId: string) => gatewayFetch<{ round: Round }>(`/api/rounds/${encodeURIComponent(roundId)}`),
   cartela: (number: number) => gatewayFetch<{ cartela: Cartela }>(`/api/cartelas/${number}`),
   cartelas: () => gatewayFetch<{ cartelas: Cartela[]; count: number }>("/api/cartelas"),
   createRound: (stake: number) => gatewayFetch<{ round: Round }>(`/api/rounds/create?stake=${stake}`, { method: "POST" }),
-  joinRound: (roundId: string, cartelaNumbers: number[], userName?: string) => gatewayFetch<{ round?: Round; ok?: boolean }>(`/api/rounds/${encodeURIComponent(roundId)}/join`, { method: "POST", body: JSON.stringify({ cartela_numbers: cartelaNumbers, user_name: userName || "Player" }) }),
-  selectCartela: (roundId: string, cartelaNumber: number) => gatewayFetch<{ ok: boolean }>(`/api/rounds/${encodeURIComponent(roundId)}/select`, { method: "POST", body: JSON.stringify({ cartela_number: cartelaNumber }) }),
-  unselectCartela: (roundId: string, cartelaNumber: number) => gatewayFetch<{ ok: boolean }>(`/api/rounds/${encodeURIComponent(roundId)}/unselect`, { method: "POST", body: JSON.stringify({ cartela_number: cartelaNumber }) }),
-  claimBingo: (roundId: string, winningCartela: number) => gatewayFetch<{ ok?: boolean; winner?: boolean; prize_per_winner?: number; already_completed?: boolean }>(`/api/rounds/${encodeURIComponent(roundId)}/claim-bingo`, { method: "POST", body: JSON.stringify({ winning_cartela: winningCartela }) }),
+  joinRound: (roundId: string, userId: string | number, cartelaNumbers: number[], userName?: string) => gatewayFetch<{ round?: Round; ok?: boolean }>(`/api/rounds/${encodeURIComponent(roundId)}/join`, { method: "POST", body: JSON.stringify({ user_id: Number(userId), cartela_numbers: cartelaNumbers, user_name: userName || "Player" }) }),
+  selectCartela: (roundId: string, userId: string | number, cartelaNumber: number) => gatewayFetch<{ ok: boolean }>(`/api/rounds/${encodeURIComponent(roundId)}/select`, { method: "POST", body: JSON.stringify({ user_id: Number(userId), cartela_number: cartelaNumber }) }),
+  unselectCartela: (roundId: string, userId: string | number, cartelaNumber: number) => gatewayFetch<{ ok: boolean }>(`/api/rounds/${encodeURIComponent(roundId)}/unselect`, { method: "POST", body: JSON.stringify({ user_id: Number(userId), cartela_number: cartelaNumber }) }),
+  claimBingo: (roundId: string, userId: string | number, winningCartela: number) => gatewayFetch<{ ok?: boolean; winner?: boolean; prize_per_winner?: number; already_completed?: boolean }>(`/api/rounds/${encodeURIComponent(roundId)}/claim-bingo`, { method: "POST", body: JSON.stringify({ user_id: Number(userId), winning_cartela: winningCartela }) }),
   depositConfig: (userId: string | number) => gatewayFetch<DepositConfig>(`/api/deposits/config/${encodeURIComponent(String(userId))}`),
   submitDeposit: (body: { telebirr_name: string; amount: number; transaction_id: string }) => gatewayFetch<{ ok?: boolean }>("/api/deposits/submit", { method: "POST", body: JSON.stringify(body) }),
   createWithdrawal: (body: { amount: number; phone: string; telebirr_name: string }, key: string) => gatewayFetch<{ ok?: boolean; error?: string; min?: number }>("/api/withdrawals/create", { method: "POST", headers: { "X-Idempotency-Key": key }, body: JSON.stringify(body) }),

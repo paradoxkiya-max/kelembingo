@@ -13,7 +13,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     const app = webApp(); const initData = app?.initData || ""; setTelegramAvailable(Boolean(app)); app?.ready?.(); app?.expand?.();
     const publicStats = await Promise.allSettled([playerApi.stats()]); if (publicStats[0].status === "fulfilled") setStats(publicStats[0].value);
     if (!initData) { setLoading(false); return; }
-    try { const auth = await playerApi.authenticate(initData); const token = auth.player_token || auth.token; if (token) window.localStorage.setItem("kelembingo.playerToken", token); setPlayer(auth.user); } catch { setPlayer(null); } finally { setLoading(false); }
+    try { const auth = await playerApi.authenticate(initData); const token = auth.player_token || auth.token; if (token) window.localStorage.setItem("kelembingo.playerToken", token); setPlayer({ ...auth.user, user_id: auth.user.user_id ?? auth.user.id }); } catch { setPlayer(null); } finally { setLoading(false); }
   }, []);
   useEffect(() => { void refresh(); const interval = window.setInterval(() => void playerApi.stats().then(setStats).catch(() => undefined), 30000); return () => window.clearInterval(interval); }, [refresh]);
   const value = useMemo(() => ({ player, stats, loading, telegramAvailable, refresh, logout: () => { window.localStorage.removeItem("kelembingo.playerToken"); setPlayer(null); } }), [player, stats, loading, telegramAvailable, refresh]);
