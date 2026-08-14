@@ -2,6 +2,28 @@
 var _originalPlayWallet = 0;
 var _lastPendingSelections = {};
 var _lastToggleTime = 0;
+var _masterCartelaCatalog = null;
+var _masterCartelaCatalogPromise = null;
+
+async function _loadMasterCartelaCatalog() {
+    if (_masterCartelaCatalog) return _masterCartelaCatalog;
+    if (!_masterCartelaCatalogPromise) {
+        _masterCartelaCatalogPromise = db.collection('cartelas_master').orderBy('number').get()
+            .then(function(snap) {
+                var items = [];
+                snap.forEach(function(doc) {
+                    items.push({ id: doc.id, data: doc.data() });
+                });
+                _masterCartelaCatalog = items;
+                return items;
+            })
+            .catch(function(err) {
+                _masterCartelaCatalogPromise = null;
+                throw err;
+            });
+    }
+    return _masterCartelaCatalogPromise;
+}
 
 function getSpendablePlayWallet() {
     var raw = currentUser ? currentUser.play_wallet : 0;
@@ -316,8 +338,8 @@ async function showCardSelection(roundId, roundData) {
     if (grid) grid.innerHTML = '<div class="col-span-8 text-center py-8"><div class="text-3xl mb-2 float-anim">🃏</div><p class="text-white/50 text-sm">Loading cartelas...</p></div>';
 
     try {
-        var masterSnap = await db.collection('cartelas_master').orderBy('number').get();
-        if (masterSnap.empty) {
+        var masterCatalog = await _loadMasterCartelaCatalog();
+        if (!masterCatalog.length) {
             if (grid) grid.innerHTML = '<div class="col-span-8 text-center py-12 px-4"><div class="text-4xl mb-3">😓</div><p class="text-white/80 text-sm font-bold mb-1">No Cards Generated</p><p class="text-white/40 text-xs">Admin needs to generate cartelas first.</p></div>';
             return;
         }
@@ -335,8 +357,8 @@ async function showCardSelection(roundId, roundData) {
         });
 
         if (grid) grid.innerHTML = '';
-        masterSnap.forEach(function(doc) {
-            var d = doc.data();
+        masterCatalog.forEach(function(item) {
+            var d = item.data;
             var num = d.number;
             var cell = document.createElement('div');
             cell.className = 'card-tile';
@@ -450,6 +472,7 @@ async function showCardSelection(roundId, roundData) {
                 if (rd.players && rd.players[uid]) {
                     document.getElementById('card-select-screen').classList.add('hidden');
                     stopSelectionCountdown();
+                    _cleanupCartelaPoolListener();
                     navigateTo('game').then(function() {
                         loadMyCartelas(rd);
                         listenToRound(roundId);
@@ -459,6 +482,7 @@ async function showCardSelection(roundId, roundData) {
                     document.getElementById('card-select-screen').classList.add('hidden');
                     stopSelectionCountdown();
                     isSpectator = true;
+                    _cleanupCartelaPoolListener();
                     navigateTo('game').then(function() {
                         setupGameBoard();
                         listenToRound(roundId);
@@ -815,6 +839,7 @@ async function confirmSelection() {
         if (cs) cs.classList.add('hidden');
         stopSelectionCountdown();
         if (roundUnsubscribe) { roundUnsubscribe(); roundUnsubscribe = null; }
+        _cleanupCartelaPoolListener();
         await navigateTo('game');
         setupGameBoard();
         listenToRound(joinRoundId);

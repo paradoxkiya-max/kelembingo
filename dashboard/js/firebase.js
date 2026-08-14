@@ -53,8 +53,40 @@
         });
     }
 
-    // Track active subscriptions for reconnection
+    // Track active subscriptions for reconnection. Multiple listeners may share
+    // one Socket.IO room; reference-count the room instead of repeatedly joining
+    // and leaving it as screens mount/unmount.
     var _activeSubscriptions = [];
+
+    function _subscriptionKey(sub) {
+        return JSON.stringify(sub);
+    }
+
+    function _registerSocketSubscription(sub) {
+        var key = _subscriptionKey(sub);
+        var existing = _activeSubscriptions.find(function(item) { return item.key === key; });
+        if (existing) {
+            existing.refs += 1;
+            return;
+        }
+        _activeSubscriptions.push({ key: key, data: sub, refs: 1 });
+        if (socket) {
+            try { socket.emit('subscribe', sub); } catch(e) {}
+        }
+    }
+
+    function _unregisterSocketSubscription(sub) {
+        var key = _subscriptionKey(sub);
+        var index = _activeSubscriptions.findIndex(function(item) { return item.key === key; });
+        if (index < 0) return;
+        var entry = _activeSubscriptions[index];
+        entry.refs -= 1;
+        if (entry.refs > 0) return;
+        _activeSubscriptions.splice(index, 1);
+        if (socket) {
+            try { socket.emit('unsubscribe', sub); } catch(e) {}
+        }
+    }
 
     function _socketSubscription(collection, docId) {
         var sub = { collection: collection };
@@ -69,8 +101,8 @@
     if (socket) {
         socket.on('connect', function() {
             // Re-subscribe to all active subscriptions on reconnect
-            _activeSubscriptions.forEach(function(sub) {
-                socket.emit('subscribe', sub);
+            _activeSubscriptions.forEach(function(entry) {
+                socket.emit('subscribe', entry.data);
             });
         });
     }
@@ -163,37 +195,58 @@
             var sub = _socketSubscription(self._collection, self.id);
             var eventName = 'snapshot';
             var handler = null;
+            var stopped = false;
+            var initialLoaded = false;
+            var queuedLive = null;
+            var lastFingerprint = null;
 
-            // Subscribe to Socket.IO room (if available)
-            _activeSubscriptions.push(sub);
-            if (socket) {
-                try { socket.emit('subscribe', sub); } catch(e) {}
+            function _deliver(id, data, exists) {
+                if (stopped) return;
+                var fingerprint = JSON.stringify({ id: id, data: data, exists: exists });
+                if (fingerprint === lastFingerprint) return;
+                lastFingerprint = fingerprint;
+                onNext(new MockDocumentSnapshot(id, data, exists, self));
             }
 
-            // Listen for updates (if Socket.IO available)
+            // Subscribe to Socket.IO room (if available)
+            _registerSocketSubscription(sub);
+
+            // Listen for updates (if Socket.IO available). Queue an update that
+            // arrives while the initial REST request is in flight; otherwise the
+            // slower REST response could overwrite a newer live snapshot.
             function _handler(msg) {
-                if (msg.collection === self._collection && msg.id === self.id) {
-                    var snap = new MockDocumentSnapshot(msg.id, msg.data, msg.exists, self);
-                    onNext(snap);
+                if (msg.collection !== self._collection || msg.id !== self.id) return;
+                if (!initialLoaded) {
+                    queuedLive = msg;
+                    return;
                 }
+                _deliver(msg.id, msg.data, msg.exists);
             }
             handler = _handler;
             if (socket) {
                 try { socket.on(eventName, handler); } catch(e) {}
             }
 
-            // Send initial snapshot via REST
-            this.get().then(onNext).catch(function(e) { if (onError) onError(e); });
+            // Send initial snapshot via REST, then apply the newest queued event.
+            this.get().then(function(snap) {
+                if (stopped) return;
+                initialLoaded = true;
+                _deliver(snap.id, snap.data(), snap.exists);
+                if (queuedLive) {
+                    var latest = queuedLive;
+                    queuedLive = null;
+                    _deliver(latest.id, latest.data, latest.exists);
+                }
+            }).catch(function(e) { if (onError && !stopped) onError(e); });
 
             // Return unsubscribe function
             return function() {
+                stopped = true;
+                queuedLive = null;
                 if (socket) {
                     try { socket.off(eventName, handler); } catch(e) {}
-                    try { socket.emit('unsubscribe', { collection: self._collection, doc_id: self.id }); } catch(e) {}
                 }
-                _activeSubscriptions = _activeSubscriptions.filter(function(s) {
-                    return !(s.collection === self._collection && s.doc_id === self.id);
-                });
+                _unregisterSocketSubscription(sub);
             };
         }
 
@@ -243,40 +296,106 @@
 
         onSnapshot(onNext, onError) {
             var self = this;
-            var subKey = this._collection + ':' + JSON.stringify(this._filters);
-            var handler = null;
-
-            // Subscribe to collection room (if Socket.IO available)
             var subData = _socketSubscription(this._collection);
-            if (socket) {
-                try { socket.emit('subscribe', subData); } catch(e) {}
+            var docsById = new Map();
+            var liveChanges = new Map();
+            var initialLoaded = false;
+            var stopped = false;
+
+            function _readField(data, path) {
+                return String(path || '').split('.').reduce(function(value, part) {
+                    return value && typeof value === 'object' ? value[part] : undefined;
+                }, data);
             }
-            _activeSubscriptions.push(subData);
+
+            function _matches(data) {
+                return self._filters.every(function(filter) {
+                    var field = filter[0], op = filter[1], expected = filter[2];
+                    var actual = _readField(data || {}, field);
+                    if (op === 'array-contains') return Array.isArray(actual) && actual.indexOf(expected) !== -1;
+                    if (op === 'in') return Array.isArray(expected) && expected.indexOf(actual) !== -1;
+                    if (op === '!=') return actual !== expected;
+                    if (op === '>') return actual > expected;
+                    if (op === '>=') return actual >= expected;
+                    if (op === '<') return actual < expected;
+                    if (op === '<=') return actual <= expected;
+                    return actual === expected;
+                });
+            }
+
+            function _orderedDocs() {
+                var docs = Array.from(docsById.values());
+                if (self._orderField) {
+                    docs.sort(function(a, b) {
+                        var av = _readField(a.data(), self._orderField);
+                        var bv = _readField(b.data(), self._orderField);
+                        if (av === bv) return String(a.id).localeCompare(String(b.id));
+                        if (av === undefined || av === null) return 1;
+                        if (bv === undefined || bv === null) return -1;
+                        var cmp = av < bv ? -1 : 1;
+                        return self._orderDir === 'DESCENDING' ? -cmp : cmp;
+                    });
+                }
+                if (self._limitN !== null) docs = docs.slice(0, self._limitN);
+                return docs;
+            }
+
+            function _notify() {
+                if (!stopped) onNext(new MockQuerySnapshot(_orderedDocs()));
+            }
+
+            function _applyChange(id, data, exists) {
+                var key = String(id);
+                var previous = docsById.get(key);
+                if (!exists || data === null || !_matches(data)) {
+                    if (!previous) return false;
+                    docsById.delete(key);
+                    return true;
+                }
+                var nextData = JSON.stringify(data);
+                if (previous && JSON.stringify(previous.data()) === nextData) return false;
+                docsById.set(key, new MockDocumentSnapshot(
+                    key, data, true,
+                    new MockDocumentReference(self._collection, key)
+                ));
+                return true;
+            }
 
             function _handler(msg) {
-                if (msg.type === 'query_snapshot' && msg.collection === self._collection) {
-                    var snap = new MockQuerySnapshot(
-                        msg.docs.map(function(d) { return new MockDocumentSnapshot(d.id, d.data, true, new MockDocumentReference(self._collection, d.id)); })
-                    );
-                    onNext(snap);
-                }
-            }
-            handler = _handler;
-            if (socket) {
-                try { socket.on('query_snapshot', handler); } catch(e) {}
+                if (msg.type !== 'query_snapshot' || msg.collection !== self._collection) return;
+                var changed = false;
+                (msg.docs || []).forEach(function(d) {
+                    liveChanges.set(String(d.id), d);
+                    if (initialLoaded) changed = _applyChange(d.id, d.data, d.data !== null) || changed;
+                });
+                if (initialLoaded && changed) _notify();
             }
 
-            // Send initial snapshot via REST
-            this.get().then(onNext).catch(function(e) { if (onError) onError(e); });
+            _registerSocketSubscription(subData);
+            if (socket) {
+                try { socket.on('query_snapshot', _handler); } catch(e) {}
+            }
+
+            // Initial REST state is merged with any live changes that arrived
+            // while the HTTP request was in flight.
+            this.get().then(function(initialSnap) {
+                if (stopped) return;
+                initialSnap.docs.forEach(function(doc) {
+                    _applyChange(doc.id, doc.data(), true);
+                });
+                liveChanges.forEach(function(change, id) {
+                    _applyChange(id, change.data, change.data !== null);
+                });
+                initialLoaded = true;
+                _notify();
+            }).catch(function(e) { if (onError) onError(e); });
 
             return function() {
+                stopped = true;
                 if (socket) {
-                    try { socket.off('query_snapshot', handler); } catch(e) {}
-                    try { socket.emit('unsubscribe', { collection: self._collection }); } catch(e) {}
+                    try { socket.off('query_snapshot', _handler); } catch(e) {}
                 }
-                _activeSubscriptions = _activeSubscriptions.filter(function(s) {
-                    return s.collection !== self._collection;
-                });
+                _unregisterSocketSubscription(subData);
             };
         }
     }

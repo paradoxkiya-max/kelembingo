@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, date, timezone
 import logging
 import sqlalchemy
-from sqlalchemy import create_engine, Column, String, Text, DateTime, Numeric, cast, func
+from sqlalchemy import create_engine, Column, String, Text, DateTime, Numeric, cast, func, Index, and_, or_
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -56,6 +56,9 @@ class FirestoreDocument(Base):
 
 class SystemEvent(Base):
     __tablename__ = 'system_events'
+    __table_args__ = (
+        Index('ix_system_events_created_at_id', 'created_at', 'id'),
+    )
     id = Column(String, primary_key=True)
     collection = Column(String)
     doc_id = Column(String)

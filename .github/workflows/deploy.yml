@@ -32,3 +32,5 @@ jobs:
         run: node --check dashboard/js/game-board.js && python tools/test_game_timer_regression.py && python tools/test_timer_schedule.py
       - name: Verify production database guard
         run: python tools/test_database_config_guard.py
+      - name: Verify realtime and single-winner hardening
+        run: node --check dashboard/js/firebase.js && node --check dashboard/js/game-board.js && python tools/test_realtime_winner_hardening.py
