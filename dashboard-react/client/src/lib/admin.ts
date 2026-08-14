@@ -37,7 +37,7 @@ export const adminApi = {
   updateUserBalance: (userId: string | number, newBalance: number) => adminFetch<{ ok?: boolean }>(`/api/admin/users/${encodeURIComponent(String(userId))}/balance`, { method: "PATCH", body: JSON.stringify({ new_balance: newBalance }) }),
   banUser: (userId: string | number, banned: boolean) => adminFetch<{ ok?: boolean }>(`/api/admin/users/${encodeURIComponent(String(userId))}/ban`, { method: "PATCH", body: JSON.stringify({ banned }) }),
   notifyUser: (userId: string | number, text: string) => adminFetch<{ status?: string }>("/api/notify", { method: "POST", body: JSON.stringify({ user_id: Number(userId), text }) }),
-  rounds: () => adminFetch<{ rounds?: AdminRound[]; count?: number }>("/api/rounds?limit=50"),
+  rounds: () => adminFetch<{ rounds?: AdminRound[]; count?: number }>("/api/rounds?limit=500"),
   deposits: () => adminFetch<AdminRecord[]>("/api/admin/deposits"),
   withdrawals: () => adminFetch<AdminRecord[]>("/api/admin/withdrawals"),
   status: () => adminFetch<{ online?: boolean; updatedAt?: string }>("/api/admin/status"),

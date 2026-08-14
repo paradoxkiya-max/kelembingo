@@ -44,7 +44,7 @@ export const playerApi = {
   reconcile: () => gatewayFetch<Player>("/api/player/reconcile-state", { method: "POST" }),
   stats: () => gatewayFetch<PublicStats>("/api/public/stats"),
   time: () => gatewayFetch<{ iso: string }>("/api/time"),
-  history: () => gatewayFetch<Round[]>("/api/rounds?status=completed&limit=50"),
+  history: () => gatewayFetch<{ rounds?: Round[]; count?: number }>("/api/rounds?status=completed&winners_only=true&limit=3"),
   activeRounds: () => gatewayFetch<{ round: Round | null }>("/api/rounds/active"),
   round: (roundId: string) => gatewayFetch<{ round: Round }>(`/api/rounds/${encodeURIComponent(roundId)}`),
   cartela: (number: number) => gatewayFetch<{ cartela: Cartela }>(`/api/cartelas/${number}`),
