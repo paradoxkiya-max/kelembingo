@@ -22,7 +22,7 @@ from startup_state import is_database_ready
 
 from game.round_engine import RoundEngine, DEFAULT_STAKE, VALID_STAKES, SELECTION_DURATION, GAME_LENGTH_RANGE, DERASH_RATIO, _parse_dt, _grid_next_number_at
 from handlers.user_manager import UserManager
-from handlers.bot_content import get_bot_text
+from handlers.bot_content import get_bot_text, get_config_value
 from datetime import datetime, date, timedelta, timezone
 from sqlalchemy import and_, or_, text as sql_text
 from telegram import Bot
@@ -622,14 +622,47 @@ class DepositConfigResponse(BaseModel):
     admin_online: bool
     pending_count: int
     pending_limit: int
+    minimum_amount: int = 10
+    texts: dict[str, str] = {}
+    message: str = ""
     error: Optional[str] = None
 
 
 class DepositSubmitRequest(BaseModel):
-    user_id: int
     telebirr_name: str
     amount: float
     transaction_id: str
+
+
+def _wallet_validation_message(validation: dict) -> str:
+    """Return the exact live bot-content text for a withdrawal validation outcome."""
+    error = str(validation.get('error') or 'system_error')
+    keys = {
+        'invalid_amount': 'withdraw_invalid_number',
+        'below_min': 'withdraw_min_not_met',
+        'insufficient': 'withdraw_invalid_range',
+        'above_max': 'withdraw_above_max',
+        'no_phone': 'withdraw_no_phone',
+        'account_new': 'withdraw_account_new',
+        'deposit_required': 'withdraw_deposit_required',
+        'pending_exists': 'withdraw_pending_exists',
+        'daily_limit': 'withdraw_daily_limit',
+        'cooldown': 'withdraw_cooldown',
+    }
+    key = keys.get(error)
+    if not key:
+        return 'Unable to validate your withdrawal. Please try again.'
+    kwargs = {
+        'min_withdraw': validation.get('min', get_config_value('cfg_min_withdraw', db, as_type=int)),
+        'balance': validation.get('balance', 0),
+        'max': validation.get('max', get_config_value('cfg_max_withdraw', db, as_type=int)),
+        'min_deposit': validation.get('min_deposit', get_config_value('cfg_min_initial_deposit', db, as_type=int)),
+        'current_deposit': validation.get('current_deposit', 0),
+        'limit': validation.get('limit', get_config_value('cfg_max_withdraw_per_day', db, as_type=int)),
+        'minutes': validation.get('minutes', 0),
+        'hours': get_config_value('cfg_withdraw_cooldown_hours', db, as_type=int),
+    }
+    return get_bot_text(key, db, **kwargs)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1796,6 +1829,13 @@ async def get_deposit_config(user_id: int, request: Request):
         raise HTTPException(status_code=404, detail="User not found")
 
     pending_limit = 3
+    texts = {
+        'name_prompt': get_bot_text('deposit_ask_name', db),
+        'amount_prompt': get_bot_text('deposit_ask_amount', db),
+        'minimum_amount': get_bot_text('deposit_min_amount', db),
+        'invalid_number': get_bot_text('deposit_invalid_number', db),
+        'send_to': get_bot_text('deposit_send_to', db, amount='{amount}', phone=phone),
+    }
 
     if pending_count >= pending_limit:
         return DepositConfigResponse(
@@ -1804,6 +1844,8 @@ async def get_deposit_config(user_id: int, request: Request):
             admin_online=admin_online,
             pending_count=pending_count,
             pending_limit=pending_limit,
+            texts=texts,
+            message=get_bot_text('deposit_too_many', db),
             error='too_many_pending',
         )
 
@@ -1814,6 +1856,8 @@ async def get_deposit_config(user_id: int, request: Request):
             admin_online=admin_online,
             pending_count=pending_count,
             pending_limit=pending_limit,
+            texts=texts,
+            message=get_bot_text('deposit_admin_offline', db),
             error='admin_offline',
         )
 
@@ -1823,6 +1867,7 @@ async def get_deposit_config(user_id: int, request: Request):
         admin_online=admin_online,
         pending_count=pending_count,
         pending_limit=pending_limit,
+        texts=texts,
     )
 
 
@@ -1902,7 +1947,7 @@ async def submit_deposit(req: DepositSubmitRequest, request: Request):
 
 class WithdrawalCreateRequest(BaseModel):
     amount: float
-    phone: str
+    phone: str = ""  # Deprecated browser field; the registered bot contact is authoritative.
     telebirr_name: str
 
 
@@ -1925,12 +1970,13 @@ async def create_withdrawal(req: WithdrawalCreateRequest, request: Request):
         lambda: asyncio.run(user_manager.validate_withdrawal(user_id, amount))
     )
     if not validation.get('ok'):
-        return {"ok": False, **validation}
+        return {"ok": False, **validation, "message": _wallet_validation_message(validation)}
 
-    phone = (req.phone or '').strip()
+    phone = str(user.get('phone') or '').strip()
     telebirr_name = (req.telebirr_name or '').strip()
     if not phone:
-        raise HTTPException(status_code=400, detail="no_phone")
+        validation = {"ok": False, "error": "no_phone"}
+        return {**validation, "message": _wallet_validation_message(validation)}
     if not telebirr_name:
         raise HTTPException(status_code=400, detail="no_name")
 

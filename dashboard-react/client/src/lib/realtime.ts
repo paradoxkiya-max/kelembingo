@@ -6,6 +6,11 @@ import { GATEWAY_URL, gatewayFetch, type Round } from "@/lib/gateway";
 type SnapshotMessage = { collection?: string; id?: string; round_id?: string; type?: string; data?: unknown; exists?: boolean; taken_cartelas?: number[]; player_count?: number; pending_selections?: Record<string, number[]> };
 type Listener = (value: Round | null) => void;
 type Subscription = { collection: string; doc_id?: string; player_token?: string };
+const roundSnapshotCache = new Map<string, Round>();
+
+export function primeRoundSnapshot(roundId: string, round: Round | null | undefined) {
+  if (roundId && round) roundSnapshotCache.set(roundId, round);
+}
 
 class RoomManager {
   private socket: Socket | null = null;
@@ -44,7 +49,8 @@ export const roomManager = new RoomManager();
 
 export function observeRound(roundId: string, listener: Listener, options: { fetchInitial?: boolean; onError?: () => void } = {}) {
   const fetchInitial = options.fetchInitial !== false;
-  let loaded = !fetchInitial; let queued: SnapshotMessage | null = null; let last = "";
+  const cached = roundSnapshotCache.get(roundId);
+  let loaded = !fetchInitial || Boolean(cached); let queued: SnapshotMessage | null = null; let last = "";
   const deliver = (data: Round | null) => { const fingerprint = JSON.stringify(data); if (fingerprint === last) return; last = fingerprint; listener(data); };
   const handle = (message: SnapshotMessage) => {
     if (message.type === "cartela_pool") return;
@@ -52,12 +58,13 @@ export function observeRound(roundId: string, listener: Listener, options: { fet
     const payload = raw && raw.round && typeof raw.round === "object" ? raw.round as Round : raw as Round | null;
     if (!loaded) queued = message;
     else if (message.exists === false) deliver(null);
-    else if (payload) deliver(payload);
+    else if (payload) { roundSnapshotCache.set(roundId, payload); deliver(payload); }
   };
   const unsubscribe = roomManager.subscribeRound(roundId, handle);
+  if (cached) listener(cached);
   if (fetchInitial) {
     gatewayFetch<{ round?: Round }>(`/api/rounds/${encodeURIComponent(roundId)}`)
-      .then((response) => { loaded = true; deliver(response.round || null); if (queued) { const latest = queued; queued = null; if (latest.exists === false) deliver(null); else if (latest.data) deliver(latest.data as Round); } })
+      .then((response) => { loaded = true; if (response.round) roundSnapshotCache.set(roundId, response.round); deliver(response.round || null); if (queued) { const latest = queued; queued = null; if (latest.exists === false) deliver(null); else if (latest.data) deliver(latest.data as Round); } })
       .catch(() => { loaded = true; options.onError?.(); });
   }
   return unsubscribe;
