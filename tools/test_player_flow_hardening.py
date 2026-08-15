@@ -17,12 +17,15 @@ assert "Spectating mode" in game
 assert "playerApi.cartela(number)" in game
 assert "prize_per_winner" in game
 assert "winner_name" in game and "winning_cartela" in game
-assert 'round.status === "completed"' in game and 'navigate(selectionPath, { replace: true })' in game
+assert 'if (winnerAnnouncement && returnCountdown === 0) navigate(selectionPath, { replace: true })' in game
+assert 'onReturn={() => navigate(selectionPath, { replace: true })}' in game
+assert 'if (!roundId) { navigate("/", { replace: true }); return; }' in game
+assert 'if (!winnerId || !Number.isInteger(cartelaNumber) || cartelaNumber < 1) {\n      navigate("/", { replace: true });' in game
 assert "This round is complete. The next round is open from the Game tab." not in game
 assert "WinnerAnnouncement" in game and "returnCountdown" in game
 assert 'setReturnCountdown(10)' in game and 'returnCountdown === 0' in game
 assert 'This round closed before your cartelas could be confirmed' not in select
-assert 'latest.status === "completed") navigate(selectionPath, { replace: true })' in select
+assert 'latest.status === "completed") navigate("/", { replace: true })' in select
 assert "Returning to cartela selection in" in winner_popup and "You" in winner_popup
 assert "Won with Cartela" in winner_popup and "Derash" in winner_popup
 assert "fetchInitial" in realtime

@@ -60,7 +60,7 @@ export default function GameBoard() {
   }, []);
 
   useEffect(() => {
-    if (!roundId) { navigate("/select", { replace: true }); return; }
+    if (!roundId) { navigate("/", { replace: true }); return; }
     setRound(null);
     setLoadError("");
     const unsubscribe = observeRound(roundId, applyRound, { onError: () => setLoadError("This round is no longer available. Please choose a new stake.") });
@@ -136,7 +136,7 @@ export default function GameBoard() {
     const winnerId = String(round.winners?.[0] || "");
     const cartelaNumber = Number(round.winning_cartela || 0);
     if (!winnerId || !Number.isInteger(cartelaNumber) || cartelaNumber < 1) {
-      navigate(selectionPath, { replace: true });
+      navigate("/", { replace: true });
       return;
     }
     const key = `${round.id || roundId}:${winnerId}:${cartelaNumber}`;
