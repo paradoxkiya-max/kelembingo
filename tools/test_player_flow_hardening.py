@@ -10,20 +10,20 @@ gateway = (ROOT / "dashboard-react/client/src/lib/gateway.ts").read_text()
 context = (ROOT / "dashboard-react/client/src/contexts/PlayerContext.tsx").read_text()
 round_engine = (ROOT / "game/round_engine.py").read_text()
 
-assert 'navigate("/", { replace: true })' in game
+assert 'selectionPath' in game
 assert '"Go"' in game and '"Syncing…"' not in game and '"Starting…"' not in game
 assert "window.setInterval(syncClock, 1000)" in game
 assert "Spectating mode" in game
 assert "playerApi.cartela(number)" in game
 assert "prize_per_winner" in game
 assert "winner_name" in game and "winning_cartela" in game
-assert 'round.status === "completed"' in game and 'navigate("/", { replace: true })' in game
+assert 'round.status === "completed"' in game and 'navigate(selectionPath, { replace: true })' in game
 assert "This round is complete. The next round is open from the Game tab." not in game
 assert "WinnerAnnouncement" in game and "returnCountdown" in game
 assert 'setReturnCountdown(10)' in game and 'returnCountdown === 0' in game
 assert 'This round closed before your cartelas could be confirmed' not in select
-assert 'latest.status === "completed") navigate("/", { replace: true })' in select
-assert "Returning to home in" in winner_popup and "You" in winner_popup
+assert 'latest.status === "completed") navigate(selectionPath, { replace: true })' in select
+assert "Returning to cartela selection in" in winner_popup and "You" in winner_popup
 assert "Won with Cartela" in winner_popup and "Derash" in winner_popup
 assert "fetchInitial" in realtime
 assert 'setAuthError(""); setPlayer(null)' not in context

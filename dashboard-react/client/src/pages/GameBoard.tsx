@@ -24,6 +24,7 @@ export default function GameBoard() {
   const { player } = usePlayer();
   const playerId = String(player?.user_id || "");
   const [round, setRound] = useState<Round | null>(null);
+  const selectionPath = `/select?stake=${encodeURIComponent(String(Number(round?.stake) || 10))}`;
   const [loadError, setLoadError] = useState("");
   const [cartelas, setCartelas] = useState<Cartela[]>([]);
   const [cardsLoading, setCardsLoading] = useState(false);
@@ -59,7 +60,7 @@ export default function GameBoard() {
   }, []);
 
   useEffect(() => {
-    if (!roundId) { navigate("/", { replace: true }); return; }
+    if (!roundId) { navigate("/select", { replace: true }); return; }
     setRound(null);
     setLoadError("");
     const unsubscribe = observeRound(roundId, applyRound, { onError: () => setLoadError("This round is no longer available. Please choose a new stake.") });
@@ -135,7 +136,7 @@ export default function GameBoard() {
     const winnerId = String(round.winners?.[0] || "");
     const cartelaNumber = Number(round.winning_cartela || 0);
     if (!winnerId || !Number.isInteger(cartelaNumber) || cartelaNumber < 1) {
-      navigate("/", { replace: true });
+      navigate(selectionPath, { replace: true });
       return;
     }
     const key = `${round.id || roundId}:${winnerId}:${cartelaNumber}`;
@@ -145,7 +146,7 @@ export default function GameBoard() {
       announcedWinner.current = key;
       if (voice) playCartelaAudio(cartelaNumber, cartelaAudio);
     }
-  }, [navigate, playerId, round, roundId, voice]);
+  }, [navigate, playerId, round, roundId, selectionPath, voice]);
 
   useEffect(() => {
     if (!winnerAnnouncement) { setWinnerCartela(null); return; }
@@ -164,8 +165,8 @@ export default function GameBoard() {
   }, [winnerAnnouncement?.key]);
 
   useEffect(() => {
-    if (winnerAnnouncement && returnCountdown === 0) navigate("/", { replace: true });
-  }, [navigate, returnCountdown, winnerAnnouncement]);
+    if (winnerAnnouncement && returnCountdown === 0) navigate(selectionPath, { replace: true });
+  }, [navigate, returnCountdown, selectionPath, winnerAnnouncement]);
 
   useEffect(() => {
     if (!round || round.status !== "playing" || !playerId || claiming) return;
@@ -214,7 +215,7 @@ export default function GameBoard() {
     </div>
     <div className="section-separator mx-2 h-px bg-white/[0.08]" /><div className="mt-auto px-2 py-2"><div className="flex items-center justify-between gap-2 rounded-2xl border border-white/[0.08] bg-[#1A1A2E]/80 px-3 py-2 backdrop-blur-xl"><button onClick={() => navigate("/", { replace: true })} className="flex items-center gap-1.5 rounded-xl border border-red-500/25 bg-red-500/15 px-3 py-2 text-[11px] font-semibold text-red-400 transition-transform active:scale-95"><X className="h-3.5 w-3.5" /> Leave</button><label className={`flex items-center gap-2 rounded-xl border px-3 py-2 ${autoMark ? "border-emerald-400/30 bg-emerald-500/10" : "border-white/10 bg-white/[0.04]"}`}><span className={`text-[10px] font-black uppercase tracking-wider ${autoMark ? "text-emerald-300" : "text-white/45"}`}>Auto mark</span><Switch checked={autoMark} onCheckedChange={setAutoMark} aria-label="Toggle automatic number marking" className="h-5 w-9 border-white/10 data-[state=checked]:bg-emerald-500 data-[state=unchecked]:bg-white/15 [&_[data-slot=switch-thumb]]:size-4" /></label></div></div>
     {claimError && <ResultModal result={{ winner: false, message: claimError }} onClose={() => setClaimError("")} />}
-    {winnerAnnouncement && <WinnerAnnouncement winner={winnerAnnouncement} cartela={winnerCartela} called={called} countdown={returnCountdown} onReturn={() => navigate("/", { replace: true })} />}
+    {winnerAnnouncement && <WinnerAnnouncement winner={winnerAnnouncement} cartela={winnerCartela} called={called} countdown={returnCountdown} onReturn={() => navigate(selectionPath, { replace: true })} />}
   </div>;
 }
 

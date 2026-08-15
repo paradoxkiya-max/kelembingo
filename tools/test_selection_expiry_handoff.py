@@ -22,6 +22,10 @@ assert "primeRoundSnapshot" in select and "primeRoundSnapshot" in realtime
 assert "const serverRound = await playerApi.round" not in select
 assert "cartelaCache" in client
 assert '"SYNCING…"' not in select and '"GO"' in select
+assert "committedWallet" in select and "setCommittedWallet(balance)" in select
+assert "initialPlayerCartelas" in select and "playerCartelas.length" in select
+assert 'This round started without your cartelas' in select
+assert 'latest.status === "completed") navigate(selectionPath' in select
 
 assert "@/components/ui/switch" in game
 assert "Auto mark" in game
