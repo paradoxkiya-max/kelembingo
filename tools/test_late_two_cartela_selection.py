@@ -57,7 +57,7 @@ with tempfile.TemporaryDirectory() as tmp:
 gateway = (ROOT / "api" / "admin_api.py").read_text()
 assert "def _mutate_pending_selection_sync" in gateway
 assert "run_idempotent(" in gateway[gateway.index("def _mutate_pending_selection_sync"):gateway.index('@app.post("/api/rounds/{round_id}/select")')]
-assert "lock_key=f\"round:{round_id}\"" in gateway
+assert 'lock_keys=[f"round:{round_id}", f"user:{user_id}"]' in gateway
 assert "Maximum {MAX_CARTELAS_PER_PLAYER} cartelas allowed" in gateway
 assert "selection_finalized_at" in gateway
 assert "await _finalize_pending_selections(round_id, post_start.to_dict())" in gateway

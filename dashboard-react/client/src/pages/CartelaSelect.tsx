@@ -16,7 +16,7 @@ const CARTELA_POOL: Cartela[] = Array.from({ length: 500 }, (_, index) => ({ num
 export default function CartelaSelect() {
   const [, navigate] = useLocation();
   const search = useSearch();
-  const { player } = usePlayer();
+  const { player, applyPlayWallet } = usePlayer();
   const requestedStake = Number(new URLSearchParams(search).get("stake"));
   const stake = STAKES.includes(requestedStake) ? requestedStake : 10;
   const [round, setRound] = useState<Round | null>(null);
@@ -30,18 +30,23 @@ export default function CartelaSelect() {
   const [error, setError] = useState("");
   const [loadError, setLoadError] = useState("");
   const [expired, setExpired] = useState(false);
+  const [selectionPending, setSelectionPending] = useState(false);
+  const [walletPreview, setWalletPreview] = useState<number | null>(null);
+  const [liveDerashPool, setLiveDerashPool] = useState<number | null>(null);
   const confirmStarted = useRef(false);
   const previewFetches = useRef(new Set<number>());
 
   const wallet = walletValue(player?.play_wallet);
+  const displayedWallet = walletPreview ?? wallet;
   const sharedCartelaCount = useMemo(() => {
-    const allRoundCartelas = new Set<number>((round?.taken_cartelas || []).map(Number));
+    const allRoundCartelas = new Set<number>(Array.from(taken));
     Object.values(pending).forEach((numbers) => (numbers || []).forEach((number) => allRoundCartelas.add(Number(number))));
+    selected.forEach((number) => allRoundCartelas.add(Number(number)));
     return Math.max(Number(round?.player_count || 0), allRoundCartelas.size);
-  }, [pending, round?.player_count, round?.taken_cartelas]);
-  const sharedDerashPool = round?.status === "playing" && Number.isFinite(Number(round.derash))
+  }, [pending, round?.player_count, selected, taken]);
+  const sharedDerashPool = liveDerashPool ?? (round?.status === "playing" && Number.isFinite(Number(round.derash))
     ? Number(round.derash)
-    : Math.round(sharedCartelaCount * stake * 0.80 * 100) / 100;
+    : Math.round(sharedCartelaCount * stake * 0.80 * 100) / 100);
 
   useEffect(() => {
     let active = true;
@@ -55,6 +60,7 @@ export default function CartelaSelect() {
       previewFetches.current.clear();
       confirmStarted.current = false;
       setRound(nextRound);
+      setLiveDerashPool(null);
       if (nextRound?.id) primeRoundSnapshot(String(nextRound.id), nextRound);
       setTaken(new Set((nextRound?.taken_cartelas || []).map(Number)));
       setPending(nextRound?.pending_selections || {});
@@ -65,6 +71,7 @@ export default function CartelaSelect() {
         unsubscribePool = observeCartelaPool(nextRound.id, (message) => {
           setTaken(new Set((message.taken_cartelas || []).map(Number)));
           setPending(message.pending_selections || {});
+          if (Number.isFinite(Number(message.derash_pool))) setLiveDerashPool(Number(message.derash_pool));
         });
         unsubscribeRound = observeRound(nextRound.id, (latest) => {
           if (!active || !latest) return;
@@ -103,17 +110,24 @@ export default function CartelaSelect() {
   const visibleCartelas = useMemo(() => CARTELA_POOL, []);
 
   async function toggleCard(number: number) {
-    if (busy || (!selected.includes(number) && taken.has(number)) || !player?.user_id || expired) return;
+    if (busy || selectionPending || (!selected.includes(number) && taken.has(number)) || !player?.user_id || expired) return;
     const isSelected = selected.includes(number);
     if (!isSelected && selected.length >= MAX_SELECTIONS) return;
+    const optimisticWallet = Math.max(0, displayedWallet + (isSelected ? stake : -stake));
+    const optimisticPool = Math.round(Math.max(0, sharedCartelaCount + (isSelected ? -1 : 1)) * stake * 0.80 * 100) / 100;
     setSelected((items) => isSelected ? items.filter((item) => item !== number) : [...items, number]);
-    if (!round?.id) return;
+    setWalletPreview(optimisticWallet);
+    setLiveDerashPool(optimisticPool);
+    setSelectionPending(true);
+    if (!round?.id) { setWalletPreview(null); setLiveDerashPool(null); setSelectionPending(false); return; }
     try {
-      await (isSelected ? playerApi.unselectCartela(round.id, player.user_id, number) : playerApi.selectCartela(round.id, player.user_id, number));
+      const result = await (isSelected ? playerApi.unselectCartela(round.id, player.user_id, number) : playerApi.selectCartela(round.id, player.user_id, number));
+      if (Number.isFinite(Number(result.play_wallet))) applyPlayWallet(Number(result.play_wallet));
     } catch (e) {
       setSelected((items) => isSelected ? [...items, number] : items.filter((item) => item !== number));
+      setLiveDerashPool(null);
       setError(e instanceof Error ? e.message : "Selection failed");
-    }
+    } finally { setWalletPreview(null); setSelectionPending(false); }
   }
 
   async function confirmSelection() {
@@ -146,7 +160,7 @@ export default function CartelaSelect() {
 
   return <div className="flex min-h-[calc(100vh-56px)] flex-col bg-[linear-gradient(180deg,#0d0f22_0%,#151833_40%,#0d0f22_100%)]">
     <div className="flex items-center justify-between border-b border-white/5 px-4 pb-2 pt-4"><button onClick={() => navigate("/")} className="flex items-center gap-1 rounded-lg bg-indigo-600/90 px-3.5 py-1.5 text-xs font-bold text-white shadow-md transition-transform active:scale-[0.97]"><ArrowLeft className="h-3.5 w-3.5" /> Back</button><h3 className="text-sm font-bold tracking-wide text-white">Select Cartela</h3><span className="w-[62px]" /></div>
-    <div className="flex items-center justify-between gap-1 border-b border-white/5 bg-[#111326]/60 px-4 py-3 text-[11px] font-semibold text-gray-300"><div className="flex gap-2"><Summary label="PLAY WALLET" value={`${wallet.toLocaleString()} ETB`} tone="text-[#34D399]" /><Summary label="STAKE" value={`${stake} ETB`} tone="text-[#FF8C00]" /><Summary label="DERASH POOL" value={`${sharedDerashPool} ETB`} tone="text-[#8B5CF6]" /></div><div className={`relative flex min-w-[68px] items-center justify-center overflow-hidden rounded-lg border px-3.5 py-1.5 ${expired ? "border-amber-400/30 bg-amber-500/15 text-amber-200" : "border-emerald-500/30 bg-emerald-600/20 text-emerald-400"}`}><div className="absolute inset-y-0 left-0 bg-gradient-to-r from-[#10B981] to-[#34D399] opacity-30 transition-[width] duration-300" style={{ width: `${Math.min(100, Math.max(0, (seconds / SELECTION_SECONDS) * 100))}%` }} /><span className="relative z-10 text-[10px] font-black">{expired ? "CLOSED" : seconds > 0 ? `${seconds}s` : "GO"}</span></div></div>
+    <div className="flex items-center justify-between gap-1 border-b border-white/5 bg-[#111326]/60 px-4 py-3 text-[11px] font-semibold text-gray-300"><div className="flex gap-2"><Summary label="PLAY WALLET" value={`${displayedWallet.toLocaleString()} ETB`} tone="text-[#34D399]" /><Summary label="STAKE" value={`${stake} ETB`} tone="text-[#FF8C00]" /><Summary label="DERASH POOL" value={`${sharedDerashPool} ETB`} tone="text-[#8B5CF6]" /></div><div className={`relative flex min-w-[68px] items-center justify-center overflow-hidden rounded-lg border px-3.5 py-1.5 ${expired ? "border-amber-400/30 bg-amber-500/15 text-amber-200" : "border-emerald-500/30 bg-emerald-600/20 text-emerald-400"}`}><div className="absolute inset-y-0 left-0 bg-gradient-to-r from-[#10B981] to-[#34D399] opacity-30 transition-[width] duration-300" style={{ width: `${Math.min(100, Math.max(0, (seconds / SELECTION_SECONDS) * 100))}%` }} /><span className="relative z-10 text-[10px] font-black">{expired ? "CLOSED" : seconds > 0 ? `${seconds}s` : "GO"}</span></div></div>
     <div className="card-select-grid-enhanced flex-1 overflow-y-auto px-2 py-2 [contain:layout_style]" aria-label="Available cartelas">{loading ? <div className="flex items-center justify-center py-16 text-sm text-white/35"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading cartelas</div> : loadError ? <div className="px-4 py-12 text-center text-xs text-red-300">{loadError}</div> : <div className="grid grid-cols-8 content-start gap-1.5 max-[360px]:grid-cols-7 max-[360px]:gap-1">{visibleCartelas.map((card) => { const isSelected = selected.includes(card.number); const isPendingTaken = Object.entries(pending).some(([uid, numbers]) => uid !== String(player?.user_id || "") && numbers.includes(card.number)); const isTaken = !isSelected && (taken.has(card.number) || isPendingTaken || Boolean(card.taken) || card.status === "taken"); return <button key={card.number} disabled={isTaken} onClick={() => void toggleCard(card.number)} aria-label={`Cartela ${card.number}${isTaken ? ", taken" : isSelected ? ", selected" : ""}`} className={`relative aspect-square rounded-lg border text-[13px] font-extrabold transition-transform active:scale-[0.92] ${isTaken ? "pointer-events-none border-[#FF8C00] bg-[#FF8C00]/25 text-[#FFB45C] shadow-[0_0_12px_rgba(255,140,0,0.35)]" : isSelected ? "z-[1] scale-[1.04] border-emerald-400/60 bg-gradient-to-br from-[#10B981] to-[#059669] text-white shadow-[0_0_16px_rgba(16,185,129,0.45)]" : "border-white/10 bg-gradient-to-br from-[#1E2340] to-[#151833] text-white shadow-[0_2px_8px_rgba(0,0,0,0.3)]"}`}>{isSelected ? <Check className="mx-auto h-4 w-4" /> : isTaken ? <span className="text-[10px]">TAKEN</span> : card.number}</button>; })}</div>}</div>
     {selected.length > 0 && <div className="sticky bottom-0 z-20 border-t border-orange-400/30 bg-[#0e1026]/95 px-3 py-2 shadow-[0_-10px_25px_rgba(0,0,0,0.35)] backdrop-blur-md"><div className="mb-1 text-center text-[10px] font-black uppercase tracking-[0.2em] text-orange-300">Selected cartelas</div><div className="flex justify-center gap-2">{selected.map((number) => { const card = cartelas.find((item) => item.number === number); return <MiniPreview key={number} card={card} />; })}</div></div>}
     {error && <div className="mx-3 mb-1 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-[11px] text-red-300" role="alert">{error}</div>}
