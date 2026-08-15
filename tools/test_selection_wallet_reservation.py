@@ -36,7 +36,7 @@ with tempfile.TemporaryDirectory() as tmp:
         })
 
         first = admin_api._mutate_pending_selection_sync(round_id, "77", 12, True, "first")
-        assert first["ok"] and first["play_wallet"] == 90 and first["_derash"] == 8, first
+        assert first["ok"] and first["play_wallet"] == 90 and first["_derash"] == 8 and first["selected_cartelas"] == [12], first
         assert db.collection("users").document("77").get().to_dict()["play_wallet"] == 90
 
         duplicate = admin_api._mutate_pending_selection_sync(round_id, "77", 12, True, "second-request")
@@ -44,10 +44,10 @@ with tempfile.TemporaryDirectory() as tmp:
         assert db.collection("users").document("77").get().to_dict()["play_wallet"] == 90
 
         second = admin_api._mutate_pending_selection_sync(round_id, "77", 35, True, "third")
-        assert second["ok"] and second["play_wallet"] == 80 and second["_derash"] == 16, second
+        assert second["ok"] and second["play_wallet"] == 80 and second["_derash"] == 16 and second["selected_cartelas"] == [12, 35], second
 
         released = admin_api._mutate_pending_selection_sync(round_id, "77", 35, False, "fourth")
-        assert released["ok"] and released["play_wallet"] == 90 and released["_derash"] == 8, released
+        assert released["ok"] and released["play_wallet"] == 90 and released["_derash"] == 8 and released["selected_cartelas"] == [12], released
 
         joined = join_round(db, round_id, 77, [12], "Player 77", idempotency_key="finalize")
         assert joined["status"] == "joined" and joined["cost"] == 0 and joined["reserved_cost"] == 10, joined
@@ -92,8 +92,10 @@ assert 'lock_keys=[f"round:{round_id}", f"user:{user_id}"]' in gateway
 assert "await broadcast_event('users', uid_str)" in gateway
 assert "derash_pool" in gateway
 assert "require_pending=True" in gateway
+assert "selected_cartelas" in gateway and "pending_revision" in gateway
 assert "applyPlayWallet" in context
 assert "walletPreview" in selection and "optimisticPool" in selection
 assert "liveDerashPool" in selection
+assert "pendingRevision" in selection and "setSelected(normalizeCartelas(result.selected_cartelas" in selection
 
 print("selection wallet reservation regression check: PASS")

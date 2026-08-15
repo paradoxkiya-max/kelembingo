@@ -3,7 +3,7 @@
 import { io, type Socket } from "socket.io-client";
 import { GATEWAY_URL, gatewayFetch, type Player, type Round } from "@/lib/gateway";
 
-type SnapshotMessage = { collection?: string; id?: string; user_id?: string; round_id?: string; type?: string; data?: unknown; docs?: Array<{ id?: string; data?: unknown }>; exists?: boolean; taken_cartelas?: number[]; player_count?: number; derash_pool?: number; pending_selections?: Record<string, number[]> };
+type SnapshotMessage = { collection?: string; id?: string; user_id?: string; round_id?: string; type?: string; data?: unknown; docs?: Array<{ id?: string; data?: unknown }>; exists?: boolean; taken_cartelas?: number[]; player_count?: number; derash_pool?: number; pending_revision?: number; pending_selections?: Record<string, number[]> };
 type Listener = (value: Round | null) => void;
 type Subscription = { collection: string; doc_id?: string; player_token?: string; admin_token?: string };
 const roundSnapshotCache = new Map<string, Round>();

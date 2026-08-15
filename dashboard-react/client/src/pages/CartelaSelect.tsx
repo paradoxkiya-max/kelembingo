@@ -36,6 +36,7 @@ export default function CartelaSelect() {
   const [liveDerashPool, setLiveDerashPool] = useState<number | null>(null);
   const confirmStarted = useRef(false);
   const previewFetches = useRef(new Set<number>());
+  const pendingRevision = useRef(0);
 
   const wallet = walletValue(player?.play_wallet);
   const displayedWallet = walletPreview ?? committedWallet ?? wallet;
@@ -71,16 +72,22 @@ export default function CartelaSelect() {
       setRound(nextRound);
       setLiveDerashPool(null);
       setCommittedWallet(null);
+      pendingRevision.current = Math.max(0, Number(nextRound?.pending_revision) || 0);
       if (nextRound?.id) primeRoundSnapshot(String(nextRound.id), nextRound);
       setTaken(new Set((nextRound?.taken_cartelas || []).map(Number)));
       setPending(nextRound?.pending_selections || {});
+      setSelected(normalizeCartelas(nextRound?.pending_selections?.[String(player?.user_id || "")] || []));
       setExpired(false);
       const deadline = nextRound?.selection_deadline ? new Date(nextRound.selection_deadline).getTime() : 0;
       if (deadline) setSeconds(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)));
       if (nextRound?.id) {
         unsubscribePool = observeCartelaPool(nextRound.id, (message) => {
+          const revision = Math.max(0, Number(message.pending_revision) || 0);
+          if (revision && revision < pendingRevision.current) return;
+          if (revision) pendingRevision.current = revision;
           setTaken(new Set((message.taken_cartelas || []).map(Number)));
           setPending(message.pending_selections || {});
+          if (revision) setSelected(normalizeCartelas(message.pending_selections?.[String(player?.user_id || "")] || []));
           if (Number.isFinite(Number(message.derash_pool))) setLiveDerashPool(Number(message.derash_pool));
         });
         unsubscribeRound = observeRound(nextRound.id, (latest) => {
@@ -141,6 +148,9 @@ export default function CartelaSelect() {
         setCommittedWallet(balance);
         applyPlayWallet(balance);
       }
+      const revision = Math.max(0, Number(result.pending_revision) || 0);
+      if (revision) pendingRevision.current = Math.max(pendingRevision.current, revision);
+      setSelected(normalizeCartelas(result.selected_cartelas ?? result.reserved_cartelas ?? []));
     } catch (e) {
       setSelected((items) => isSelected ? [...items, number] : items.filter((item) => item !== number));
       setLiveDerashPool(null);
@@ -187,4 +197,5 @@ export default function CartelaSelect() {
 
 function Summary({ label, value, tone }: { label: string; value: string; tone: string }) { return <div className="flex flex-col justify-center rounded-lg border border-white/5 bg-[#1E2340] px-2 py-1"><span className="text-[9px] leading-none text-gray-500">{label}</span><span className={`mt-0.5 font-bold leading-normal ${tone}`}>{value}</span></div>; }
 function MiniPreview({ card }: { card?: Cartela }) { const values = flattenCartela(card); return <div className="w-full overflow-hidden rounded-lg border-2 border-orange-400 bg-[#1A1A2E] shadow-[0_0_14px_rgba(255,140,0,0.25)]"><div className="bg-gradient-to-r from-[#FF8C00] to-[#FF6B00] py-0.5 text-center text-[7px] font-black tracking-wider text-white">CARTELA NO: {card?.number || "—"}</div><div className="grid grid-cols-5 gap-px">{["B", "I", "N", "G", "O"].map((letter, index) => <div key={letter} className="py-0.5 text-center text-[6px] font-black text-white" style={{ background: ["#3B82F6", "#8B5CF6", "#D946EF", "#10B981", "#F97316"][index] }}>{letter}</div>)}{values.map((number, index) => <div key={`${number}-${index}`} className={`aspect-square text-center text-[6px] font-bold leading-3 ${index === 12 ? "bg-emerald-500 text-white" : "bg-[#151833] text-white/70"}`}>{index === 12 ? "★" : number}</div>)}</div></div>; }
+function normalizeCartelas(values: unknown) { return Array.isArray(values) ? Array.from(new Set(values.map(Number).filter((value) => Number.isInteger(value) && value >= 1 && value <= 500))).slice(0, MAX_SELECTIONS) : []; }
 function flattenCartela(card?: Cartela) { const source: unknown = card?.cartela || card?.data || card?.grid || []; const values = Array.isArray(source) && Array.isArray(source[0]) ? (source as number[][]).reduce<number[]>((all, row) => all.concat(row), []) : Array.isArray(source) ? source as number[] : []; return values.length === 25 ? values : Array.from({ length: 25 }, (_, index) => index + 1); }
