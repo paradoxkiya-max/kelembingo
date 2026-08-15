@@ -9,17 +9,22 @@ home = (ROOT / "dashboard-react/client/src/pages/Home.tsx").read_text()
 round_engine = (ROOT / "game/round_engine.py").read_text()
 
 # Both gameplay refresh paths must prefer the server-stored Derash value.
-assert "round.derash || Math.round" in game_board
+assert "function roundDerashPool(round: Round)" in game_board
 assert "round.player_count" in game_board
 
 # The final result must continue to display the server-provided per-winner payout.
 assert "prize_per_winner" in game_board
 
 # Labels must distinguish estimates, the round pool, and the actual winner payout.
-assert "EST. DERASH" in card_select
+assert "DERASH POOL" in card_select
 assert "DERASH POOL" in game_board
 assert "PRIZE PER WINNER" in game_board
 assert "estimated earnings" in profile.lower()
+assert "DERASH POOL" in card_select
+assert "EST. DERASH" not in card_select
+assert "sharedCartelaCount" in card_select and "sharedDerashPool" in card_select
+assert "selected.length) * stake" not in card_select
+assert "roundDerashPool(round)" in game_board
 
 # The display fix must match the authoritative 80% Derash / 20% admin policy.
 assert "DERASH_RATIO = 0.80" in round_engine
