@@ -1369,8 +1369,8 @@ async def select_cartela(round_id: str, req: SelectRequest, request: Request):
     )
     if 'error' in result:
         raise HTTPException(status_code=400, detail=result['error'])
-    await broadcast_event('users', uid_str)
-    # Broadcast directly with data we already have — no extra DB read
+    # Broadcast directly from the committed transaction result before the slower
+    # user snapshot read so every other player sees taken-state immediately.
     pool_snapshot = {
         "type": "cartela_pool",
         "round_id": round_id,
@@ -1381,6 +1381,7 @@ async def select_cartela(round_id: str, req: SelectRequest, request: Request):
         "pending_selections": result.get('_pending', {}),
     }
     await sio.emit('cartela_pool', pool_snapshot, room=f"rounds:{round_id}")
+    await broadcast_event('users', uid_str)
     return {
         "ok": True,
         "play_wallet": result.get("play_wallet"),
@@ -1399,7 +1400,8 @@ async def unselect_cartela(round_id: str, req: SelectRequest, request: Request):
     )
     if 'error' in result:
         raise HTTPException(status_code=400, detail=result['error'])
-    await broadcast_event('users', uid_str)
+    # The mutation has committed durably; emit its authoritative pool first so
+    # other players do not wait for the wallet snapshot read.
     pool_snapshot = {
         "type": "cartela_pool",
         "round_id": round_id,
@@ -1410,6 +1412,7 @@ async def unselect_cartela(round_id: str, req: SelectRequest, request: Request):
         "pending_selections": result.get('_pending', {}),
     }
     await sio.emit('cartela_pool', pool_snapshot, room=f"rounds:{round_id}")
+    await broadcast_event('users', uid_str)
     return {
         "ok": True,
         "play_wallet": result.get("play_wallet"),
