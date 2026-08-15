@@ -14,6 +14,7 @@ const letters = ["B", "I", "N", "G", "O"];
 const colors = ["#3B82F6", "#8B5CF6", "#D946EF", "#10B981", "#F97316"];
 const numbers = Array.from({ length: 75 }, (_, index) => index + 1);
 const EMPTY_MARKED = new Set<number>();
+const NUMBER_CALL_INTERVAL_SECONDS = 5;
 
 function statusRank(status?: string) { return status === "completed" ? 3 : status === "playing" ? 2 : status === "selecting" ? 1 : 0; }
 
@@ -36,6 +37,7 @@ export default function GameBoard() {
   const [current, setCurrent] = useState<number | null>(null);
   const [countdown, setCountdown] = useState(0);
   const [timer, setTimer] = useState(0);
+  const [serverClockOffset, setServerClockOffset] = useState(0);
   const [claiming, setClaiming] = useState(false);
   const [claimError, setClaimError] = useState("");
   const [winnerAnnouncement, setWinnerAnnouncement] = useState<(WinnerAnnouncementData & { key: string }) | null>(null);
@@ -66,6 +68,17 @@ export default function GameBoard() {
     const unsubscribe = observeRound(roundId, applyRound, { onError: () => setLoadError("This round is no longer available. Please choose a new stake.") });
     return unsubscribe;
   }, [applyRound, navigate, roundId]);
+
+  useEffect(() => {
+    let active = true;
+    const requestStarted = Date.now();
+    void playerApi.time().then(({ iso }) => {
+      const requestFinished = Date.now();
+      const serverNow = new Date(iso).getTime();
+      if (active && Number.isFinite(serverNow)) setServerClockOffset(serverNow - ((requestStarted + requestFinished) / 2));
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [roundId]);
 
   const playerCartelaKey = (round?.players?.[playerId]?.cartelas || []).slice(0, 2).map(Number).join(",");
   const hasPlayerEntry = Boolean(playerId && round?.players && Object.prototype.hasOwnProperty.call(round.players, playerId));
@@ -112,10 +125,10 @@ export default function GameBoard() {
 
   useEffect(() => {
     const syncClock = () => {
-      const now = Date.now();
+      const now = Date.now() + serverClockOffset;
       const nextAt = round?.next_number_at ? new Date(round.next_number_at).getTime() : 0;
       const selectionAt = round?.selection_deadline ? new Date(round.selection_deadline).getTime() : 0;
-      const nextTimer = nextAt ? Math.max(0, Math.ceil((nextAt - now) / 1000)) : 0;
+      const nextTimer = nextAt ? Math.min(NUMBER_CALL_INTERVAL_SECONDS, Math.max(0, Math.ceil((nextAt - now) / 1000))) : 0;
       const nextCountdown = round?.status === "selecting" && selectionAt ? Math.max(0, Math.ceil((selectionAt - now) / 1000)) : 0;
       setTimer((old) => old === nextTimer ? old : nextTimer);
       setCountdown((old) => old === nextCountdown ? old : nextCountdown);
@@ -123,7 +136,7 @@ export default function GameBoard() {
     syncClock();
     const interval = window.setInterval(syncClock, 1000);
     return () => window.clearInterval(interval);
-  }, [round?.next_number_at, round?.selection_deadline, round?.status]);
+  }, [round?.next_number_at, round?.selection_deadline, round?.status, serverClockOffset]);
 
   useEffect(() => {
     if (audioWarmupDone.current || round?.status !== "playing" || timer > 4 || timer < 1) return;

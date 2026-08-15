@@ -1344,7 +1344,9 @@ def _mutate_pending_selection_sync(
             "_taken": round_data.get('taken_cartelas', []),
             "_pc": pool['player_count'],
             "_derash": pool['derash_pool'],
+            "_revision": int(round_data.get('pending_revision', 0) or 0) + 1,
             "play_wallet": round(wallet, 2),
+            "selected_cartelas": selected,
             "reserved_cartelas": reserved,
         }
 
@@ -1373,6 +1375,7 @@ async def select_cartela(round_id: str, req: SelectRequest, request: Request):
         "taken_cartelas": result.pop('_taken', []),
         "player_count": result.pop('_pc', 0),
         "derash_pool": result.pop('_derash', 0),
+        "pending_revision": result.pop('_revision', 0),
         "pending_selections": result.pop('_pending', {}),
     }, room=f"rounds:{round_id}")
     return result
@@ -1394,6 +1397,7 @@ async def unselect_cartela(round_id: str, req: SelectRequest, request: Request):
         "taken_cartelas": result.pop('_taken', []),
         "player_count": result.pop('_pc', 0),
         "derash_pool": result.pop('_derash', 0),
+        "pending_revision": result.pop('_revision', 0),
         "pending_selections": result.pop('_pending', {}),
     }, room=f"rounds:{round_id}")
     return result

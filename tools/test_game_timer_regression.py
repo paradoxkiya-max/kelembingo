@@ -8,6 +8,8 @@ checks = {
     "server_round_clock_fields": "round?.next_number_at" in source and "round?.selection_deadline" in source,
     "one_second_clock": "window.setInterval(syncClock, 1000)" in source and "setInterval(syncClock, 200)" not in source,
     "five_second_countdown_math": "Math.ceil((nextAt - now) / 1000)" in source,
+    "server_clock_compensation": "playerApi.time()" in source and "serverClockOffset" in source,
+    "visible_five_second_ceiling": "NUMBER_CALL_INTERVAL_SECONDS = 5" in source and "Math.min(NUMBER_CALL_INTERVAL_SECONDS" in source,
     "selection_expiry_countdown": "round?.status === \"selecting\"" in source and "round?.selection_deadline" in source,
     "called_numbers_state": "round?.called_numbers" in source and "called.size" in source,
     "playback_deduplication": "previous !== null" in source and "calledNumbers.length > previous.length" in source,
