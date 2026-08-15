@@ -62,10 +62,10 @@ export default function CartelaSelect() {
           if (!active || !latest) return;
           setRound(latest);
           if (latest.status === "playing") navigate(`/game?round=${encodeURIComponent(String(latest.id || nextRound.id))}`, { replace: true });
-          else if (latest.status === "completed") setExpired(true);
+          else if (latest.status === "completed") navigate("/", { replace: true });
         }, { fetchInitial: false });
         if (nextRound.status === "playing") navigate(`/game?round=${encodeURIComponent(String(nextRound.id))}`, { replace: true });
-        else if (nextRound.status === "completed") setExpired(true);
+        else if (nextRound.status === "completed") navigate("/", { replace: true });
       }
     }).catch((e) => active && setLoadError(e instanceof Error ? e.message : "Unable to load this round")).finally(() => active && setLoading(false));
     return () => { active = false; unsubscribePool?.(); unsubscribeRound?.(); };
@@ -74,7 +74,7 @@ export default function CartelaSelect() {
   useEffect(() => {
     if (seconds <= 0) {
       if (selected.length && !confirmStarted.current) { confirmStarted.current = true; void confirmSelection(); }
-      else if (!selected.length) setExpired(true);
+      else if (!selected.length) navigate("/", { replace: true });
       return;
     }
     const timer = window.setInterval(() => setSeconds((value) => value - 1), 1000);
@@ -116,7 +116,8 @@ export default function CartelaSelect() {
       if (!activeRound?.id) throw new Error("Round unavailable");
       const serverRound = await playerApi.round(activeRound.id).then((response) => response.round).catch(() => null);
       const alreadyJoined = Boolean(serverRound?.players?.[String(player.user_id)]?.cartelas?.length);
-      if (!alreadyJoined) await playerApi.joinRound(activeRound.id, player.user_id, selected, player.first_name || "Player");
+      const displayName = player.username ? `@${player.username.replace(/^@/, "")}` : player.first_name || "Player";
+      if (!alreadyJoined) await playerApi.joinRound(activeRound.id, player.user_id, selected, displayName);
       navigate(`/game?round=${encodeURIComponent(activeRound.id)}`, { replace: true });
     } catch (e) {
       const activeRoundId = round?.id;
@@ -126,7 +127,10 @@ export default function CartelaSelect() {
         navigate(`/game?round=${encodeURIComponent(String(latest?.id || activeRoundId))}`, { replace: true });
         return;
       }
-      if (latest?.status === "completed") setExpired(true);
+      if (latest?.status === "completed") {
+        navigate("/", { replace: true });
+        return;
+      }
       setError(e instanceof Error ? e.message : "Could not join the round");
       setBusy(false);
     }
@@ -138,7 +142,6 @@ export default function CartelaSelect() {
     <div className="card-select-grid-enhanced flex-1 overflow-y-auto px-2 py-2 [contain:layout_style]" aria-label="Available cartelas">{loading ? <div className="flex items-center justify-center py-16 text-sm text-white/35"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading cartelas</div> : loadError ? <div className="px-4 py-12 text-center text-xs text-red-300">{loadError}</div> : <div className="grid grid-cols-8 content-start gap-1.5 max-[360px]:grid-cols-7 max-[360px]:gap-1">{visibleCartelas.map((card) => { const isSelected = selected.includes(card.number); const isPendingTaken = Object.entries(pending).some(([uid, numbers]) => uid !== String(player?.user_id || "") && numbers.includes(card.number)); const isTaken = !isSelected && (taken.has(card.number) || isPendingTaken || Boolean(card.taken) || card.status === "taken"); return <button key={card.number} disabled={isTaken} onClick={() => void toggleCard(card.number)} aria-label={`Cartela ${card.number}${isTaken ? ", taken" : isSelected ? ", selected" : ""}`} className={`relative aspect-square rounded-lg border text-[13px] font-extrabold transition-transform active:scale-[0.92] ${isTaken ? "pointer-events-none border-[#FF8C00] bg-[#FF8C00]/25 text-[#FFB45C] shadow-[0_0_12px_rgba(255,140,0,0.35)]" : isSelected ? "z-[1] scale-[1.04] border-emerald-400/60 bg-gradient-to-br from-[#10B981] to-[#059669] text-white shadow-[0_0_16px_rgba(16,185,129,0.45)]" : "border-white/10 bg-gradient-to-br from-[#1E2340] to-[#151833] text-white shadow-[0_2px_8px_rgba(0,0,0,0.3)]"}`}>{isSelected ? <Check className="mx-auto h-4 w-4" /> : isTaken ? <span className="text-[10px]">TAKEN</span> : card.number}</button>; })}</div>}</div>
     {selected.length > 0 && <div className="sticky bottom-0 z-20 border-t border-orange-400/30 bg-[#0e1026]/95 px-3 py-2 shadow-[0_-10px_25px_rgba(0,0,0,0.35)] backdrop-blur-md"><div className="mb-1 text-center text-[10px] font-black uppercase tracking-[0.2em] text-orange-300">Selected cartelas</div><div className="flex justify-center gap-2">{selected.map((number) => { const card = cartelas.find((item) => item.number === number); return <MiniPreview key={number} card={card} />; })}</div></div>}
     {error && <div className="mx-3 mb-1 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-[11px] text-red-300" role="alert">{error}</div>}
-    {expired && <div className="mx-3 mb-1 rounded-xl border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-center text-[11px] font-semibold text-amber-200" role="status">This round closed before your cartelas could be confirmed. Return to the game tab and choose the newly opened round.</div>}
     <div className="border-t border-white/5 bg-[#0a0f1d] pb-4"><div className={`items-center justify-between px-4 py-2 text-xs ${selected.length ? "flex" : "hidden"}`}><span className="font-semibold text-gray-400">Selected: <span className="font-bold text-emerald-400">{selected.length}/{MAX_SELECTIONS}</span> cards</span><span className="font-semibold text-gray-400">Total Cost: <span className="font-bold text-orange-400">{selected.length * stake} ETB</span></span></div><div className="grid grid-cols-2 gap-2 px-4 py-2"><button onClick={() => navigate("/", { replace: true })} disabled={busy} className="rounded-xl bg-white/10 py-3 text-sm font-bold text-white transition-colors hover:bg-white/20 disabled:opacity-50">Cancel</button><button onClick={() => void confirmSelection()} disabled={busy || !selected.length || expired} className="rounded-xl bg-gradient-to-r from-[#FF9800] to-[#FF6D00] py-3 text-sm font-black text-white shadow-[0_8px_20px_rgba(255,140,0,0.2)] transition-transform active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45">{busy ? "Joining…" : "Play now"}</button></div></div>
   </div>;
 }

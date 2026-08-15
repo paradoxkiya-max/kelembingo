@@ -650,6 +650,7 @@ class RoundEngine:
                         'ok': existing[0] == str(user_id),
                         'winner': existing[0] == str(user_id),
                         'winner_ids': [int(existing[0])],
+                        'winner_name': data.get('winner_name', 'Player'),
                         'winning_cartela': data.get('winning_cartela'),
                         'prize_per_winner': data.get('prize_per_winner', 0),
                         'already_completed': True,
@@ -707,6 +708,7 @@ class RoundEngine:
                 'ok': True,
                 'winner': True,
                 'winner_ids': [int(user_id)],
+                'winner_name': player_name,
                 'winning_cartela': canonical_cartela,
                 'prize_per_winner': total_pool * 0.75,
                 'already_completed': False,
@@ -812,6 +814,7 @@ class RoundEngine:
                 return {
                     'status': 'completed',
                     'winners': [int(w) for w in (data.get('winners') or [])],
+                    'winner_name': data.get('winner_name', 'Player'),
                     'prize_per_winner': data.get('prize_per_winner', 0),
                     'admin_profit': data.get('admin_profit', 0),
                     'already_processed': True,
@@ -875,15 +878,20 @@ class RoundEngine:
                             'losses': user_data.get('losses', 0) + 1,
                         })
 
-            winner_names = []
-            for wid in valid_winner_ids:
-                user_ref = self.db.collection('users').document(str(wid))
-                user_doc = transaction.get(user_ref)
-                winner_names.append(user_doc.to_dict().get('first_name', 'Unknown') if user_doc.exists else 'Unknown')
+            stored_winner_name = str(data.get('winner_name') or '').strip()
+            winner_names = [stored_winner_name] if stored_winner_name else []
+            if not winner_names:
+                for wid in valid_winner_ids:
+                    user_ref = self.db.collection('users').document(str(wid))
+                    user_doc = transaction.get(user_ref)
+                    user_data = user_doc.to_dict() if user_doc.exists else {}
+                    username = str(user_data.get('username') or '').strip()
+                    winner_names.append(f"@{username.lstrip('@')}" if username else user_data.get('first_name', 'Player'))
 
             result = {
                 'status': 'completed',
                 'winners': valid_winner_ids,
+                'winner_name': winner_names[0] if len(winner_names) == 1 else ', '.join(winner_names),
                 'prize_per_winner': prize_per_winner,
                 'admin_profit': admin_profit,
             }

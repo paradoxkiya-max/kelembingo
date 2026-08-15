@@ -2,6 +2,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 game = (ROOT / "dashboard-react/client/src/pages/GameBoard.tsx").read_text()
+winner_popup = (ROOT / "dashboard-react/client/src/components/player/WinnerAnnouncement.tsx").read_text()
 select = (ROOT / "dashboard-react/client/src/pages/CartelaSelect.tsx").read_text()
 wallet = (ROOT / "dashboard-react/client/src/pages/Wallet.tsx").read_text()
 realtime = (ROOT / "dashboard-react/client/src/lib/realtime.ts").read_text()
@@ -15,6 +16,15 @@ assert "window.setInterval(syncClock, 1000)" in game
 assert "Spectating mode" in game
 assert "playerApi.cartela(number)" in game
 assert "prize_per_winner" in game
+assert "winner_name" in game and "winning_cartela" in game
+assert 'round.status === "completed"' in game and 'navigate("/", { replace: true })' in game
+assert "This round is complete. The next round is open from the Game tab." not in game
+assert "WinnerAnnouncement" in game and "returnCountdown" in game
+assert 'setReturnCountdown(10)' in game and 'returnCountdown === 0' in game
+assert 'This round closed before your cartelas could be confirmed' not in select
+assert 'latest.status === "completed") navigate("/", { replace: true })' in select
+assert "Returning to home in" in winner_popup and "You" in winner_popup
+assert "Won with Cartela" in winner_popup and "Derash" in winner_popup
 assert "fetchInitial" in realtime
 assert 'setAuthError(""); setPlayer(null)' not in context
 assert 'navigate(`/game?round=${encodeURIComponent(String(nextRound.id))}`, { replace: true })' in select
@@ -25,5 +35,6 @@ assert "formatGatewayError" in wallet and "formatGatewayError(response.error" in
 assert "export function formatGatewayError" in gateway
 assert 'detail?: unknown }).detail' not in gateway
 assert "prize_per_winner': total_pool * 0.75" in round_engine
+assert "'winner_name': player_name" in round_engine
 
 print("player flow hardening contract check: PASS")
