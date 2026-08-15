@@ -17,10 +17,10 @@ import json
 import datetime
 import urllib.parse
 from config import db, BOT_TOKEN
-from firestore_db import MockFirestoreClient, SessionLocal, SystemEvent, FieldFilter, Increment, ArrayUnion, engine as db_engine
+from firestore_db import MockFirestoreClient, SessionLocal, SystemEvent, FieldFilter, Increment, ArrayUnion, engine as db_engine, run_idempotent
 from startup_state import is_database_ready
 
-from game.round_engine import RoundEngine, DEFAULT_STAKE, VALID_STAKES, SELECTION_DURATION, GAME_LENGTH_RANGE, DERASH_RATIO, _parse_dt, _grid_next_number_at
+from game.round_engine import RoundEngine, DEFAULT_STAKE, VALID_STAKES, SELECTION_DURATION, GAME_LENGTH_RANGE, DERASH_RATIO, MAX_CARTELAS_PER_PLAYER, TOTAL_CARTELAS, _parse_dt, _grid_next_number_at
 from handlers.user_manager import UserManager
 from handlers.bot_content import get_bot_text, get_config_value
 from datetime import datetime, date, timedelta, timezone
@@ -601,6 +601,7 @@ class JoinRoundRequest(BaseModel):
 class SelectRequest(BaseModel):
     user_id: int
     cartela_number: int
+    request_id: Optional[str] = None
 
 
 class BingoCheckRequest(BaseModel):
@@ -710,7 +711,11 @@ async def _start_playing_round(round_id: str, round_data: dict) -> bool:
         'derash': derash,
         'game_started_at': now,
         'next_number_at': now + timedelta(seconds=NUMBER_CALL_INTERVAL),
-        'pending_selections': {},
+        # Keep the pre-deadline selection record through the first call. A tap
+        # accepted immediately before the deadline can complete after the
+        # finalizer's first snapshot; settlement will accept only that already
+        # pending card during this short, no-number grace window.
+        'selection_finalized_at': now,
     }))
     await broadcast_event('rounds', round_id)
     return True
@@ -752,6 +757,13 @@ async def _game_loop(round_id: str):
                     # Finalize selections on the gateway rather than waiting for
                     # slow Telegram WebView requests to reach /join after 0s.
                     await _finalize_pending_selections(round_id, data)
+                    # Let selection requests that began before the deadline
+                    # acquire the durable round lock, then read their merged
+                    # pending state before the first playing transition.
+                    await asyncio.sleep(0.15)
+                    capture = await _db(lambda: db.collection('rounds').document(round_id).get())
+                    if capture.exists and capture.to_dict().get('status') == 'selecting':
+                        await _finalize_pending_selections(round_id, capture.to_dict())
                     refreshed = await _db(lambda: db.collection('rounds').document(round_id).get())
                     if not refreshed.exists:
                         return
@@ -793,6 +805,15 @@ async def _game_loop(round_id: str):
                         return
 
             await asyncio.sleep(1)
+
+        # Capture any request that committed immediately before the transition.
+        # No new selection can be created while playing; settlement permits
+        # only these already-pending cartelas and only before the first number.
+        await asyncio.sleep(0.15)
+        post_start = await _db(lambda: db.collection('rounds').document(round_id).get())
+        if post_start.exists and post_start.to_dict().get('status') == 'playing':
+            await _finalize_pending_selections(round_id, post_start.to_dict())
+            await broadcast_event('rounds', round_id)
 
         # Now call numbers every 5 seconds
         called = []
@@ -1178,29 +1199,80 @@ async def join_round(round_id: str, req: JoinRoundRequest, request: Request):
     return result
 
 
+def _mutate_pending_selection_sync(
+    round_id: str,
+    user_id: str,
+    cartela_number: int,
+    selecting: bool,
+    request_id: Optional[str] = None,
+) -> dict:
+    """Atomically add or remove one pending cartela under the durable round lock.
+
+    Two taps close together used to perform independent read-modify-write calls.
+    The later write could replace the earlier player's pending list, causing the
+    expiry finalizer to join only one of two selected cartelas. Locking the
+    entire mutation keeps the pending list an ordered union until it is joined.
+    """
+    action = "select" if selecting else "unselect"
+    safe_request_id = str(request_id or _secrets.token_urlsafe(18))[:96]
+    operation_key = f"pending-{action}:{round_id}:{user_id}:{cartela_number}:{safe_request_id}"
+
+    def _apply(transaction):
+        round_ref = db.collection('rounds').document(round_id)
+        snap = transaction.get(round_ref)
+        if not snap.exists:
+            return {"error": "Round not found"}
+        round_data = snap.to_dict()
+        if round_data.get('status') not in ('selecting', None):
+            return {"error": "Round not in selecting phase"}
+        if not 1 <= int(cartela_number) <= TOTAL_CARTELAS:
+            return {"error": "Invalid cartela number"}
+
+        raw_pending = round_data.get('pending_selections', {})
+        pending = {
+            str(uid): list(numbers) if isinstance(numbers, list) else []
+            for uid, numbers in raw_pending.items()
+        } if isinstance(raw_pending, dict) else {}
+        selected = [int(number) for number in pending.get(user_id, []) if str(number).isdigit()]
+        selected = list(dict.fromkeys(number for number in selected if 1 <= number <= TOTAL_CARTELAS))
+
+        if selecting:
+            if cartela_number not in selected:
+                if len(selected) >= MAX_CARTELAS_PER_PLAYER:
+                    return {"error": f"Maximum {MAX_CARTELAS_PER_PLAYER} cartelas allowed"}
+                if cartela_number in set(round_data.get('taken_cartelas', []) or []):
+                    return {"error": f"Cartela #{cartela_number} is already taken"}
+                for pending_user, pending_numbers in pending.items():
+                    if pending_user != user_id and cartela_number in pending_numbers:
+                        return {"error": f"Cartela #{cartela_number} is already being selected"}
+                selected.append(cartela_number)
+        else:
+            selected = [number for number in selected if number != cartela_number]
+
+        pending[user_id] = selected
+        transaction.update(round_ref, {'pending_selections': pending})
+        return {
+            "ok": True,
+            "_pending": pending,
+            "_taken": round_data.get('taken_cartelas', []),
+            "_pc": round_data.get('player_count', 0),
+        }
+
+    return run_idempotent(
+        operation_key,
+        f"pending_{action}",
+        _apply,
+        lock_key=f"round:{round_id}",
+    )
+
+
 @app.post("/api/rounds/{round_id}/select")
 async def select_cartela(round_id: str, req: SelectRequest, request: Request):
     """Player taps a cartela during selection phase — mark as pending for others to see."""
     uid_str = str(_actor_user_id(request, req.user_id))
-    def _do_select():
-        snap = db.collection('rounds').document(round_id).get()
-        if not snap.exists:
-            return {"error": "Round not found"}
-        rd = snap.to_dict()
-        if rd.get('status') not in ('selecting', None):
-            return {"error": "Round not in selecting phase"}
-        pending = rd.get('pending_selections', {})
-        if not isinstance(pending, dict):
-            pending = {}
-        user_list = pending.get(uid_str, [])
-        if not isinstance(user_list, list):
-            user_list = []
-        if req.cartela_number not in user_list:
-            user_list.append(req.cartela_number)
-        pending[uid_str] = user_list
-        db.collection('rounds').document(round_id).update({'pending_selections': pending})
-        return {"ok": True, "_pending": pending, "_taken": rd.get('taken_cartelas', []), "_pc": rd.get('player_count', 0)}
-    result = await asyncio.to_thread(_do_select)
+    result = await asyncio.to_thread(
+        _mutate_pending_selection_sync, round_id, uid_str, req.cartela_number, True, req.request_id
+    )
     if 'error' in result:
         raise HTTPException(status_code=400, detail=result['error'])
     # Broadcast directly with data we already have — no extra DB read
@@ -1218,23 +1290,9 @@ async def select_cartela(round_id: str, req: SelectRequest, request: Request):
 async def unselect_cartela(round_id: str, req: SelectRequest, request: Request):
     """Player deselects a cartela — remove from pending."""
     uid_str = str(_actor_user_id(request, req.user_id))
-    def _do_unselect():
-        snap = db.collection('rounds').document(round_id).get()
-        if not snap.exists:
-            return {"error": "Round not found"}
-        rd = snap.to_dict()
-        pending = rd.get('pending_selections', {})
-        if not isinstance(pending, dict):
-            pending = {}
-        user_list = pending.get(uid_str, [])
-        if not isinstance(user_list, list):
-            user_list = []
-        if req.cartela_number in user_list:
-            user_list.remove(req.cartela_number)
-        pending[uid_str] = user_list
-        db.collection('rounds').document(round_id).update({'pending_selections': pending})
-        return {"ok": True, "_pending": pending, "_taken": rd.get('taken_cartelas', []), "_pc": rd.get('player_count', 0)}
-    result = await asyncio.to_thread(_do_unselect)
+    result = await asyncio.to_thread(
+        _mutate_pending_selection_sync, round_id, uid_str, req.cartela_number, False, req.request_id
+    )
     if 'error' in result:
         raise HTTPException(status_code=400, detail=result['error'])
     await sio.emit('cartela_pool', {
@@ -1736,6 +1794,7 @@ async def internal_create_withdrawal(req: InternalWithdrawalCreateRequest, reque
         return result
     await broadcast_event("users", str(req.user_id))
     await broadcast_event("withdrawals", result["withdrawal_id"])
+    await broadcast_player_payment(str(req.user_id), "withdrawals", result["withdrawal_id"])
     return result
 
 
@@ -1763,6 +1822,7 @@ async def internal_create_deposit(req: InternalDepositCreateRequest, request: Re
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "Deposit creation failed"))
     await broadcast_event("deposits", result["deposit_id"])
+    await broadcast_player_payment(str(req.user_id), "deposits", result["deposit_id"])
     return result
 
 
@@ -1777,6 +1837,8 @@ async def internal_settle_deposit(deposit_id: str, status: str, request: Request
     if result.get("user_id") is not None:
         await broadcast_event("users", str(result["user_id"]))
     await broadcast_event("deposits", deposit_id)
+    if result.get("user_id") is not None:
+        await broadcast_player_payment(str(result["user_id"]), "deposits", deposit_id)
     return result
 
 
@@ -1791,6 +1853,8 @@ async def internal_settle_withdrawal(withdrawal_id: str, status: str, request: R
     if result.get("user_id") is not None:
         await broadcast_event("users", str(result["user_id"]))
     await broadcast_event("withdrawals", withdrawal_id)
+    if result.get("user_id") is not None:
+        await broadcast_player_payment(str(result["user_id"]), "withdrawals", withdrawal_id)
     return result
 
 
@@ -2030,6 +2094,8 @@ async def admin_approve_deposit(deposit_id: str, req: DepositActionRequest):
     user_id = str(result.get("user_id", ""))
     await broadcast_event("users", user_id)
     await broadcast_event("deposits", deposit_id)
+    if user_id:
+        await broadcast_player_payment(user_id, "deposits", deposit_id)
     try:
         bot = Bot(token=BOT_TOKEN)
         await bot.send_message(
@@ -2051,6 +2117,7 @@ async def admin_reject_deposit(deposit_id: str, req: DepositActionRequest):
     user_id = str(result.get("user_id", ""))
     await broadcast_event("deposits", deposit_id)
     if user_id:
+        await broadcast_player_payment(user_id, "deposits", deposit_id)
         try:
             bot = Bot(token=BOT_TOKEN)
             await bot.send_message(
@@ -2131,7 +2198,11 @@ async def admin_approve_withdrawal(withdrawal_id: str, req: DepositActionRequest
         raise HTTPException(status_code=400, detail=result.get("error", "Withdrawal settlement failed"))
     amount = result.get("amount", 0)
     user_id = str(result.get("user_id", ""))
+    if user_id:
+        await broadcast_event("users", user_id)
     await broadcast_event("withdrawals", withdrawal_id)
+    if user_id:
+        await broadcast_player_payment(user_id, "withdrawals", withdrawal_id)
     try:
         from handlers.bot_content import get_bot_text
         bot = Bot(token=BOT_TOKEN)
@@ -2156,6 +2227,7 @@ async def admin_reject_withdrawal(withdrawal_id: str, req: DepositActionRequest)
     await broadcast_event("withdrawals", withdrawal_id)
     if user_id:
         await broadcast_event("users", user_id)
+        await broadcast_player_payment(user_id, "withdrawals", withdrawal_id)
         try:
             from handlers.bot_content import get_bot_text
             bot = Bot(token=BOT_TOKEN)
@@ -2583,7 +2655,7 @@ async def subscribe(sid, data):
         if not identity:
             return {"ok": False, "error": "Unauthorized"}
         if identity.get("kind") == "player":
-            if collection != "users" or str(doc_id) != str(identity.get("user_id")):
+            if collection not in {"users", "payments"} or str(doc_id) != str(identity.get("user_id")):
                 return {"ok": False, "error": "Forbidden"}
     room = f"{collection}:{doc_id}" if doc_id else collection
     await sio.enter_room(sid, room)
@@ -2653,6 +2725,16 @@ async def broadcast_event(collection: str, doc_id: str):
         }
         await sio.emit('query_snapshot', query_payload, room=room_collection)
     return True
+
+
+async def broadcast_player_payment(user_id: str, collection: str, document_id: str):
+    """Notify only the owning player that one payment status changed."""
+    await sio.emit('payment_update', {
+        "type": "payment_update",
+        "collection": collection,
+        "id": document_id,
+        "user_id": str(user_id),
+    }, room=f"payments:{user_id}")
 
 async def broadcast_cartelas_update():
     """Safely broadcast cartela pool update to all admin dashboards."""

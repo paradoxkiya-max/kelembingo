@@ -1,11 +1,11 @@
 // Style reminder: realtime state must feel instant but never duplicate listeners, snapshots, timers, or playback.
 
 import { io, type Socket } from "socket.io-client";
-import { GATEWAY_URL, gatewayFetch, type Round } from "@/lib/gateway";
+import { GATEWAY_URL, gatewayFetch, type Player, type Round } from "@/lib/gateway";
 
-type SnapshotMessage = { collection?: string; id?: string; round_id?: string; type?: string; data?: unknown; exists?: boolean; taken_cartelas?: number[]; player_count?: number; pending_selections?: Record<string, number[]> };
+type SnapshotMessage = { collection?: string; id?: string; user_id?: string; round_id?: string; type?: string; data?: unknown; docs?: Array<{ id?: string; data?: unknown }>; exists?: boolean; taken_cartelas?: number[]; player_count?: number; pending_selections?: Record<string, number[]> };
 type Listener = (value: Round | null) => void;
-type Subscription = { collection: string; doc_id?: string; player_token?: string };
+type Subscription = { collection: string; doc_id?: string; player_token?: string; admin_token?: string };
 const roundSnapshotCache = new Map<string, Round>();
 
 export function primeRoundSnapshot(roundId: string, round: Round | null | undefined) {
@@ -24,21 +24,48 @@ class RoomManager {
       this.socket.on("connect", () => { this.ready = true; Array.from(this.rooms.values()).forEach((room) => this.socket?.emit("subscribe", room.data)); });
       this.socket.on("disconnect", () => { this.ready = false; });
       this.socket.on("snapshot", (message: SnapshotMessage) => this.dispatch("snapshot", message));
+      this.socket.on("query_snapshot", (message: SnapshotMessage) => this.dispatch("query_snapshot", message));
       this.socket.on("cartela_pool", (message: SnapshotMessage) => this.dispatch("cartela_pool", message));
+      this.socket.on("payment_update", (message: SnapshotMessage) => this.dispatch("payment_update", message));
       return this.socket;
     } catch { this.socket = null; return null; }
   }
 
   private dispatch(event: string, message: SnapshotMessage) {
-    if (event === "snapshot" && message.collection !== "rounds") return;
+    if (event === "snapshot" && !message.collection) return;
+    if (event === "query_snapshot" && !message.collection) return;
     if (event === "cartela_pool" && message.collection && message.collection !== "rounds") return;
-    const id = message.id || message.round_id || String((message.data as { id?: string } | undefined)?.id || "");
-    Array.from(this.rooms.entries()).forEach(([key, room]) => { if (key !== JSON.stringify({ collection: "rounds", doc_id: id, player_token: room.data.player_token })) return; Array.from(room.listeners).forEach((listener) => listener(message)); });
+    if (event === "query_snapshot") {
+      Array.from(this.rooms.values()).forEach((room) => {
+        if (room.data.collection !== message.collection || room.data.doc_id) return;
+        Array.from(room.listeners).forEach((listener) => listener(message));
+      });
+      return;
+    }
+    const collection = event === "cartela_pool" ? "rounds" : event === "payment_update" ? "payments" : message.collection || "";
+    const id = event === "payment_update" ? String(message.user_id || "") : message.id || message.round_id || String((message.data as { id?: string } | undefined)?.id || "");
+    Array.from(this.rooms.values()).forEach((room) => {
+      if (room.data.collection !== collection || String(room.data.doc_id || "") !== String(id)) return;
+      Array.from(room.listeners).forEach((listener) => listener(message));
+    });
+  }
+
+  subscribeDocument(collection: string, docId: string, listener: (message: SnapshotMessage) => void) {
+    const data: Subscription = { collection, doc_id: docId };
+    const playerToken = window.localStorage.getItem("kelembingo.playerToken"); if (playerToken) data.player_token = playerToken;
+    const adminToken = window.localStorage.getItem("kelembingo.adminToken"); if (adminToken) data.admin_token = adminToken;
+    const key = JSON.stringify(data); const existing = this.rooms.get(key);
+    if (existing) { existing.refs += 1; existing.listeners.add(listener); } else { this.rooms.set(key, { data, refs: 1, listeners: new Set([listener]) }); this.connect()?.emit("subscribe", data); }
+    return () => { const room = this.rooms.get(key); if (!room) return; room.listeners.delete(listener); room.refs -= 1; if (room.refs <= 0) { this.rooms.delete(key); this.socket?.emit("unsubscribe", data); } };
   }
 
   subscribeRound(roundId: string, listener: (message: SnapshotMessage) => void) {
-    const data: Subscription = { collection: "rounds", doc_id: roundId };
-    const token = window.localStorage.getItem("kelembingo.playerToken"); if (token) data.player_token = token;
+    return this.subscribeDocument("rounds", roundId, listener);
+  }
+
+  subscribeCollection(collection: string, listener: (message: SnapshotMessage) => void) {
+    const data: Subscription = { collection };
+    const adminToken = window.localStorage.getItem("kelembingo.adminToken"); if (adminToken) data.admin_token = adminToken;
     const key = JSON.stringify(data); const existing = this.rooms.get(key);
     if (existing) { existing.refs += 1; existing.listeners.add(listener); } else { this.rooms.set(key, { data, refs: 1, listeners: new Set([listener]) }); this.connect()?.emit("subscribe", data); }
     return () => { const room = this.rooms.get(key); if (!room) return; room.listeners.delete(listener); room.refs -= 1; if (room.refs <= 0) { this.rooms.delete(key); this.socket?.emit("unsubscribe", data); } };
@@ -74,4 +101,21 @@ export function observeCartelaPool(roundId: string, listener: (message: Snapshot
   return roomManager.subscribeRound(roundId, (message) => {
     if (message.type === "cartela_pool" || message.round_id === roundId) listener(message);
   });
+}
+
+export function observePlayer(userId: string, listener: (player: Player | null) => void) {
+  return roomManager.subscribeDocument("users", userId, (message) => {
+    if (message.exists === false) { listener(null); return; }
+    const data = message.data && typeof message.data === "object" ? message.data as Player : null;
+    if (data) listener(data);
+  });
+}
+
+export function observePlayerPayments(userId: string, listener: () => void) {
+  return roomManager.subscribeDocument("payments", userId, () => listener());
+}
+
+export function observeAdminCollections(collections: string[], listener: () => void) {
+  const unsubscribes = collections.map((collection) => roomManager.subscribeCollection(collection, listener));
+  return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
 }

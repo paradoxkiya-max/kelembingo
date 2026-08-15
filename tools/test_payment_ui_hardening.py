@@ -4,6 +4,8 @@ ROOT = Path(__file__).resolve().parents[1]
 wallet = (ROOT / 'dashboard-react/client/src/pages/Wallet.tsx').read_text()
 gateway = (ROOT / 'dashboard-react/client/src/lib/gateway.ts').read_text()
 admin_api = (ROOT / 'api/admin_api.py').read_text()
+context = (ROOT / 'dashboard-react/client/src/contexts/PlayerContext.tsx').read_text()
+realtime = (ROOT / 'dashboard-react/client/src/lib/realtime.ts').read_text()
 
 assert 'crypto.randomUUID' in wallet
 assert 'createWithdrawal' in wallet
@@ -31,5 +33,10 @@ assert "phone = str(user.get('phone') or '').strip()" in admin_api
 assert 'return {"ok": False, "error": "system_error"}' in admin_api
 assert 'asyncio.create_task(_notify_admin_deposit_web' in admin_api
 assert 'asyncio.create_task(_notify_admin_withdrawal_web' in admin_api
+assert 'observePlayer' in context and 'playerApi.reconcile' in context
+assert 'subscribeDocument("users", userId' in realtime
+assert 'event === "payment_update" ? "payments"' in realtime
+withdraw_approval = admin_api[admin_api.index('async def admin_approve_withdrawal'):admin_api.index('async def admin_reject_withdrawal')]
+assert 'await broadcast_event("users", user_id)' in withdraw_approval
 
 print('payment UI hardening regression check: PASS')

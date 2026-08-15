@@ -60,6 +60,8 @@ jobs:
         run: python tools/test_telegram_webapp_contract.py
       - name: Verify two-card and local-audio contract
         run: python tools/test_two_card_audio_contract.py
+      - name: Verify late two-cartela selection preservation
+        run: python tools/test_late_two_cartela_selection.py
       - name: Verify player flow hardening contract
         run: python tools/test_player_flow_hardening.py
       - name: Verify selection expiry handoff and in-app popup contract
