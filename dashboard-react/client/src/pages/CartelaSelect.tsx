@@ -32,12 +32,14 @@ export default function CartelaSelect() {
   const [expired, setExpired] = useState(false);
   const [selectionPending, setSelectionPending] = useState(false);
   const [walletPreview, setWalletPreview] = useState<number | null>(null);
+  const [committedWallet, setCommittedWallet] = useState<number | null>(null);
   const [liveDerashPool, setLiveDerashPool] = useState<number | null>(null);
   const confirmStarted = useRef(false);
   const previewFetches = useRef(new Set<number>());
 
   const wallet = walletValue(player?.play_wallet);
-  const displayedWallet = walletPreview ?? wallet;
+  const displayedWallet = walletPreview ?? committedWallet ?? wallet;
+  const selectionPath = `/select?stake=${encodeURIComponent(String(stake))}`;
   const sharedCartelaCount = useMemo(() => {
     const allRoundCartelas = new Set<number>(Array.from(taken));
     Object.values(pending).forEach((numbers) => (numbers || []).forEach((number) => allRoundCartelas.add(Number(number))));
@@ -47,6 +49,14 @@ export default function CartelaSelect() {
   const sharedDerashPool = liveDerashPool ?? (round?.status === "playing" && Number.isFinite(Number(round.derash))
     ? Number(round.derash)
     : Math.round(sharedCartelaCount * stake * 0.80 * 100) / 100);
+
+  useEffect(() => {
+    if (committedWallet !== null && wallet === committedWallet) setCommittedWallet(null);
+  }, [committedWallet, wallet]);
+
+  useEffect(() => {
+    if (!selected.length) confirmStarted.current = false;
+  }, [selected.length]);
 
   useEffect(() => {
     let active = true;
@@ -61,6 +71,7 @@ export default function CartelaSelect() {
       confirmStarted.current = false;
       setRound(nextRound);
       setLiveDerashPool(null);
+      setCommittedWallet(null);
       if (nextRound?.id) primeRoundSnapshot(String(nextRound.id), nextRound);
       setTaken(new Set((nextRound?.taken_cartelas || []).map(Number)));
       setPending(nextRound?.pending_selections || {});
@@ -76,15 +87,19 @@ export default function CartelaSelect() {
         unsubscribeRound = observeRound(nextRound.id, (latest) => {
           if (!active || !latest) return;
           setRound(latest);
-          if (latest.status === "playing") { const targetId = String(latest.id || nextRound.id); primeRoundSnapshot(targetId, latest); navigate(`/game?round=${encodeURIComponent(targetId)}`, { replace: true }); }
-          else if (latest.status === "completed") navigate("/", { replace: true });
+          const playerCartelas = latest.players?.[String(player?.user_id || "")]?.cartelas || [];
+          if (latest.status === "playing" && playerCartelas.length) { const targetId = String(latest.id || nextRound.id); primeRoundSnapshot(targetId, latest); navigate(`/game?round=${encodeURIComponent(targetId)}`, { replace: true }); }
+          else if (latest.status === "playing") { setSelected([]); setWalletPreview(null); setExpired(true); setError("This round started without your cartelas. The next selection opens after this game."); }
+          else if (latest.status === "completed") navigate(selectionPath, { replace: true });
         }, { fetchInitial: false });
-        if (nextRound.status === "playing") navigate(`/game?round=${encodeURIComponent(String(nextRound.id))}`, { replace: true });
-        else if (nextRound.status === "completed") navigate("/", { replace: true });
+        const initialPlayerCartelas = nextRound.players?.[String(player?.user_id || "")]?.cartelas || [];
+        if (nextRound.status === "playing" && initialPlayerCartelas.length) navigate(`/game?round=${encodeURIComponent(String(nextRound.id))}`, { replace: true });
+        else if (nextRound.status === "playing") { setExpired(true); setError("This round is already live. The next selection opens after this game."); }
+        else if (nextRound.status === "completed") navigate(selectionPath, { replace: true });
       }
     }).catch((e) => active && setLoadError(e instanceof Error ? e.message : "Unable to load this round")).finally(() => active && setLoading(false));
     return () => { active = false; unsubscribePool?.(); unsubscribeRound?.(); };
-  }, [navigate, stake, player?.user_id]);
+  }, [navigate, selectionPath, stake, player?.user_id]);
 
   useEffect(() => {
     if (seconds <= 0) {
@@ -122,7 +137,11 @@ export default function CartelaSelect() {
     if (!round?.id) { setWalletPreview(null); setLiveDerashPool(null); setSelectionPending(false); return; }
     try {
       const result = await (isSelected ? playerApi.unselectCartela(round.id, player.user_id, number) : playerApi.selectCartela(round.id, player.user_id, number));
-      if (Number.isFinite(Number(result.play_wallet))) applyPlayWallet(Number(result.play_wallet));
+      if (Number.isFinite(Number(result.play_wallet))) {
+        const balance = Number(result.play_wallet);
+        setCommittedWallet(balance);
+        applyPlayWallet(balance);
+      }
     } catch (e) {
       setSelected((items) => isSelected ? [...items, number] : items.filter((item) => item !== number));
       setLiveDerashPool(null);
@@ -150,7 +169,7 @@ export default function CartelaSelect() {
         return;
       }
       if (latest?.status === "completed") {
-        navigate("/", { replace: true });
+        navigate(selectionPath, { replace: true });
         return;
       }
       setError(e instanceof Error ? e.message : "Could not join the round");
