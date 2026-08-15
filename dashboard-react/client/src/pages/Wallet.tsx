@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { usePlayer } from "@/contexts/PlayerContext";
 import { formatGatewayError, playerApi, type Transaction } from "@/lib/gateway";
 import { etb, relativeDate, walletValue } from "@/lib/format";
+import { observePlayerPayments } from "@/lib/realtime";
 
 type DepositValues = { name: string; amount: string; transactionId: string };
 type WithdrawValues = { phone: string; name: string; amount: string };
@@ -45,6 +46,11 @@ export default function Wallet() {
   }, [player?.user_id]);
 
   useEffect(() => { void loadTransactions(); }, [loadTransactions]);
+  useEffect(() => {
+    const userId = String(player?.user_id || "");
+    if (!userId) return;
+    return observePlayerPayments(userId, () => { cacheAt.current = 0; void loadTransactions(); });
+  }, [loadTransactions, player?.user_id]);
 
   function openModal(kind: "deposit" | "withdraw") {
     setNotice("");

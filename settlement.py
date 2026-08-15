@@ -1,6 +1,6 @@
 """Idempotent deposit and withdrawal settlement shared by bot processes."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import math
 import uuid
 
@@ -282,14 +282,44 @@ def join_round(
         round_data = round_doc.to_dict()
         status = round_data.get("status")
         called = round_data.get("called_numbers", []) or []
-        if status != "selecting":
+        players = round_data.get("players", {}) or {}
+        existing_player = players.get(uid_str) if isinstance(players.get(uid_str), dict) else {}
+        existing_cartelas = []
+        for value in existing_player.get("cartelas", []) if existing_player else []:
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= number <= int(total_cartelas) and number not in existing_cartelas:
+                existing_cartelas.append(number)
+        combined_cartelas = list(dict.fromkeys(existing_cartelas + selected))
+        if len(combined_cartelas) > int(max_cartelas):
+            return {"error": f"Maximum {max_cartelas} cartelas allowed"}
+        added_cartelas = [number for number in combined_cartelas if number not in existing_cartelas]
+
+        if status == "playing":
+            pending = round_data.get("pending_selections", {}) or {}
+            allowed = pending.get(uid_str, []) if isinstance(pending, dict) else []
+            try:
+                allowed_numbers = {int(number) for number in allowed}
+            except (TypeError, ValueError):
+                allowed_numbers = set()
+            started_at = round_data.get("game_started_at")
+            if isinstance(started_at, str):
+                try:
+                    started_at = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+                except ValueError:
+                    started_at = None
+            if isinstance(started_at, datetime) and started_at.tzinfo is None:
+                started_at = started_at.replace(tzinfo=timezone.utc)
+            grace_ended = not isinstance(started_at, datetime) or datetime.now(tz=timezone.utc) > started_at + timedelta(seconds=5)
+            if called or grace_ended or not set(selected).issubset(allowed_numbers):
+                return {"error": "Round is no longer accepting players"}
+        elif status != "selecting":
             return {"error": "Round is no longer accepting players"}
 
-        players = round_data.get("players", {}) or {}
-        if uid_str in players:
-            return {"error": "You already joined this round"}
         taken = set(round_data.get("taken_cartelas", []) or [])
-        for number in selected:
+        for number in added_cartelas:
             if number in taken:
                 return {"error": f"Cartela #{number} is already taken"}
 
@@ -299,7 +329,7 @@ def join_round(
             return {"error": "Invalid round stake"}
         if not math.isfinite(round_stake) or round_stake < 0:
             return {"error": "Invalid round stake"}
-        total_cost = round_stake * len(selected)
+        total_cost = round_stake * len(added_cartelas)
         user_ref = db.collection("users").document(uid_str)
         user_doc = transaction.get(user_ref)
         if not user_doc.exists:
@@ -325,7 +355,7 @@ def join_round(
         else:
             user_data = user_doc.to_dict()
 
-        if user_data.get("is_playing"):
+        if user_data.get("is_playing") and user_data.get("active_round_id") != round_id:
             active_round = user_data.get("active_round_id")
             suffix = f" ({active_round})" if active_round else ""
             return {"error": f"You are already playing in an active round{suffix}"}
@@ -346,22 +376,29 @@ def join_round(
             "updated_at": now,
         })
         player_entry = {
-            "cartelas": selected,
-            "name": user_name,
-            "joined_at": now.isoformat(),
+            "cartelas": combined_cartelas,
+            "name": existing_player.get("name") or user_name,
+            "joined_at": existing_player.get("joined_at") or now.isoformat(),
         }
         updated_taken = list(round_data.get("taken_cartelas", []) or [])
-        updated_taken.extend(number for number in selected if number not in updated_taken)
-        transaction.update(round_ref, {
+        updated_taken.extend(number for number in added_cartelas if number not in updated_taken)
+        round_updates = {
             f"players.{uid_str}": player_entry,
-            "player_count": int(round_data.get("player_count", 0) or 0) + len(selected),
+            "player_count": int(round_data.get("player_count", 0) or 0) + len(added_cartelas),
             "taken_cartelas": updated_taken,
-        })
+        }
+        if status == "playing":
+            round_updates["derash"] = (int(round_data.get("player_count", 0) or 0) + len(added_cartelas)) * round_stake * 0.80
+        if status == "playing" and isinstance(round_data.get("pending_selections"), dict):
+            pending = dict(round_data.get("pending_selections") or {})
+            pending.pop(uid_str, None)
+            round_updates["pending_selections"] = pending
+        transaction.update(round_ref, round_updates)
         return {
-            "status": "joined",
+            "status": "expanded" if existing_cartelas and added_cartelas else "joined",
             "cost": total_cost,
-            "cartelas": selected,
-            "player_count": int(round_data.get("player_count", 0) or 0) + len(selected),
+            "cartelas": combined_cartelas,
+            "player_count": int(round_data.get("player_count", 0) or 0) + len(added_cartelas),
         }
 
     return firestore_db.run_idempotent(

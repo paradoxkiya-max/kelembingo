@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { playerApi, type Player, type PublicStats } from "@/lib/gateway";
+import { observePlayer } from "@/lib/realtime";
 
 export type TelegramAuthState = "detecting" | "browser" | "telegram-no-init-data" | "authenticating" | "authenticated" | "auth-failed";
 type PlayerContextValue = { player: Player | null; stats: PublicStats | null; loading: boolean; telegramAvailable: boolean; telegramState: TelegramAuthState; authError: string; refresh: () => Promise<void>; logout: () => void };
@@ -19,6 +20,23 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     try { const auth = await playerApi.authenticate(initData); const token = auth.player_token || auth.token; if (!token) throw new Error("Telegram authentication returned no player token"); window.localStorage.setItem("kelembingo.playerToken", token); setPlayer({ ...auth.user, user_id: auth.user.user_id ?? auth.user.id }); setTelegramState("authenticated"); } catch (error) { setPlayer(null); setTelegramState("auth-failed"); setAuthError(error instanceof Error ? error.message : "Telegram authentication failed"); } finally { setLoading(false); }
   }, []);
   useEffect(() => { void refresh(); const interval = window.setInterval(() => void playerApi.stats().then(setStats).catch(() => undefined), 30000); return () => window.clearInterval(interval); }, [refresh]);
+  useEffect(() => {
+    const userId = String(player?.user_id ?? player?.id ?? "");
+    if (!userId) return;
+    const applyPlayer = (next: Player | null | undefined) => {
+      if (!next) return;
+      setPlayer((current) => current ? {
+        ...current,
+        ...next,
+        id: next.id ?? current.id,
+        user_id: next.user_id ?? next.id ?? current.user_id,
+      } : current);
+      void playerApi.stats().then(setStats).catch(() => undefined);
+    };
+    const unsubscribe = observePlayer(userId, applyPlayer);
+    void playerApi.reconcile().then((result) => applyPlayer(result.user)).catch(() => undefined);
+    return unsubscribe;
+  }, [player?.id, player?.user_id]);
   const value = useMemo(() => ({ player, stats, loading, telegramAvailable: telegramState !== "browser" && telegramState !== "detecting", telegramState, authError, refresh, logout: () => { window.localStorage.removeItem("kelembingo.playerToken"); setPlayer(null); setTelegramState("telegram-no-init-data"); } }), [player, stats, loading, telegramState, authError, refresh]);
   return <PlayerContext.Provider value={value}>{children}</PlayerContext.Provider>;
 }

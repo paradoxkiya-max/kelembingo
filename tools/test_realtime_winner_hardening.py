@@ -94,6 +94,9 @@ admin_source = (REPO / "api" / "admin_api.py").read_text()
 round_source = (REPO / "game" / "round_engine.py").read_text()
 realtime_source = (REPO / "dashboard-react" / "client" / "src" / "lib" / "realtime.ts").read_text()
 game_source = (REPO / "dashboard-react" / "client" / "src" / "pages" / "GameBoard.tsx").read_text()
+player_context = (REPO / "dashboard-react" / "client" / "src" / "contexts" / "PlayerContext.tsx").read_text()
+admin_context = (REPO / "dashboard-react" / "client" / "src" / "contexts" / "AdminContext.tsx").read_text()
+wallet_source = (REPO / "dashboard-react" / "client" / "src" / "pages" / "Wallet.tsx").read_text()
 
 assert "SystemEvent.id > last_id" not in admin_source
 assert "_latest_event_cursor" in admin_source
@@ -104,6 +107,13 @@ assert "claim-bingo" in admin_source
 assert "subscribe" in realtime_source
 assert "reconnection" in realtime_source
 assert "unsubscribe" in realtime_source
+assert "subscribeCollection" in realtime_source and "observeAdminCollections" in realtime_source
+assert "observePlayerPayments" in realtime_source and "admin_token" in realtime_source
+assert "collection not in {\"users\", \"payments\"}" in admin_source
+assert "broadcast_player_payment" in admin_source and '"user_id": str(user_id)' in admin_source
+assert "observePlayer" in player_context and "playerApi.reconcile" in player_context
+assert "observeAdminCollections" in admin_context and "realtimeRevision" in admin_context
+assert "observePlayerPayments" in wallet_source and "cacheAt.current = 0" in wallet_source
 assert "claimBingo" in game_source
 
 print("realtime and single-winner hardening regression check: PASS")

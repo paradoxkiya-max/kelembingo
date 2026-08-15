@@ -81,7 +81,7 @@ function normalizeTransaction(document: TransactionDocument): Transaction {
 
 export const playerApi = {
   authenticate: (initData: string) => gatewayFetch<{ user: Player; player_token?: string; token?: string }>("/api/player/auth", { method: "POST", body: JSON.stringify({ initData }) }),
-  reconcile: () => gatewayFetch<Player>("/api/player/reconcile-state", { method: "POST" }),
+  reconcile: () => gatewayFetch<{ ok?: boolean; active?: boolean; user?: Player }>("/api/player/reconcile-state", { method: "POST" }),
   stats: () => gatewayFetch<PublicStats>("/api/public/stats"),
   time: () => gatewayFetch<{ iso: string }>("/api/time"),
   history: () => gatewayFetch<{ rounds?: Round[]; count?: number }>("/api/rounds?status=completed&winners_only=true&limit=3"),
