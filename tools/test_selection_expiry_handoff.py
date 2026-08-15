@@ -27,8 +27,10 @@ assert "initialPlayerCartelas" in select and "playerCartelas.length" in select
 assert 'This round started without your cartelas' in select
 assert 'latest.status === "completed") navigate("/", { replace: true })' in select
 assert '"Play now"' not in select
-assert '<Dialog open={confirmOpen}' in select
-assert 'Cancel this card' in select and 'Join game' in select
+assert "confirmOpen" not in select and "<Dialog" not in select
+assert "Tap a selected cartela to remove it" in select
+assert 'aria-label={`Remove selected Cartela ${number}`}' in select
+assert 'onClick={() => void toggleCard(number)}' in select
 
 assert "@/components/ui/switch" in game
 assert "Auto mark" in game
@@ -39,4 +41,4 @@ assert "window.confirm" not in admin
 assert "window.prompt" not in admin
 assert "AlertDialog" in admin and "toast." in admin
 
-print("selection expiry, auto-toggle, and popup regression check: PASS")
+print("selection expiry, auto-toggle, and direct-removal regression check: PASS")
