@@ -25,7 +25,7 @@ assert '"SYNCING…"' not in select and '"GO"' in select
 assert "committedWallet" in select and "setCommittedWallet(balance)" in select
 assert "initialPlayerCartelas" in select and "playerCartelas.length" in select
 assert 'This round started without your cartelas' in select
-assert 'latest.status === "completed") navigate(selectionPath' in select
+assert 'latest.status === "completed") navigate("/", { replace: true })' in select
 assert '"Play now"' not in select
 assert '<Dialog open={confirmOpen}' in select
 assert 'Cancel this card' in select and 'Join game' in select

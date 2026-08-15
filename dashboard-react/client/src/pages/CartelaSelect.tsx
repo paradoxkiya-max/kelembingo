@@ -92,12 +92,12 @@ export default function CartelaSelect() {
           const playerCartelas = latest.players?.[String(player?.user_id || "")]?.cartelas || [];
           if (latest.status === "playing" && playerCartelas.length) { const targetId = String(latest.id || nextRound.id); primeRoundSnapshot(targetId, latest); navigate(`/game?round=${encodeURIComponent(targetId)}`, { replace: true }); }
           else if (latest.status === "playing") { setSelected([]); setWalletPreview(null); setExpired(true); setError("This round started without your cartelas. The next selection opens after this game."); }
-          else if (latest.status === "completed") navigate(selectionPath, { replace: true });
+          else if (latest.status === "completed") navigate("/", { replace: true });
         }, { fetchInitial: false });
         const initialPlayerCartelas = nextRound.players?.[String(player?.user_id || "")]?.cartelas || [];
         if (nextRound.status === "playing" && initialPlayerCartelas.length) navigate(`/game?round=${encodeURIComponent(String(nextRound.id))}`, { replace: true });
         else if (nextRound.status === "playing") { setExpired(true); setError("This round is already live. The next selection opens after this game."); }
-        else if (nextRound.status === "completed") navigate(selectionPath, { replace: true });
+        else if (nextRound.status === "completed") navigate("/", { replace: true });
       }
     }).catch((e) => active && setLoadError(e instanceof Error ? e.message : "Unable to load this round")).finally(() => active && setLoading(false));
     return () => { active = false; unsubscribePool?.(); unsubscribeRound?.(); };
@@ -173,7 +173,7 @@ export default function CartelaSelect() {
         return;
       }
       if (latest?.status === "completed") {
-        navigate(selectionPath, { replace: true });
+        navigate("/", { replace: true });
         return;
       }
       setError(e instanceof Error ? e.message : "Could not join the round");
