@@ -26,6 +26,9 @@ assert "committedWallet" in select and "setCommittedWallet(balance)" in select
 assert "initialPlayerCartelas" in select and "playerCartelas.length" in select
 assert 'This round started without your cartelas' in select
 assert 'latest.status === "completed") navigate(selectionPath' in select
+assert '"Play now"' not in select
+assert '<Dialog open={confirmOpen}' in select
+assert 'Cancel this card' in select and 'Join game' in select
 
 assert "@/components/ui/switch" in game
 assert "Auto mark" in game

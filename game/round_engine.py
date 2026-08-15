@@ -220,13 +220,15 @@ class RoundEngine:
             )
         )
 
-    def join_round_sync(self, round_id: str, user_id: int, 
-                        cartela_numbers: List[int], user_name: str) -> dict:
+    def join_round_sync(self, round_id: str, user_id: int,
+                        cartela_numbers: List[int], user_name: str,
+                        require_pending: bool = False, pending_revision: int = 0) -> dict:
         """Synchronous implementation of player joining a round."""
         from settlement import join_round
         operation_key = (
             f"{round_id}:{user_id}:"
-            f"{','.join(str(number) for number in cartela_numbers)}"
+            f"{','.join(str(number) for number in cartela_numbers)}:"
+            f"pending={int(require_pending)}:revision={int(pending_revision)}"
         )
         return join_round(
             self.db,
@@ -237,9 +239,11 @@ class RoundEngine:
             max_cartelas=MAX_CARTELAS_PER_PLAYER,
             total_cartelas=TOTAL_CARTELAS,
             idempotency_key=operation_key,
+            require_pending=require_pending,
         )
-    async def join_round(self, round_id: str, user_id: int, 
-                         cartela_numbers: List[int], user_name: str) -> dict:
+    async def join_round(self, round_id: str, user_id: int,
+                         cartela_numbers: List[int], user_name: str,
+                         require_pending: bool = False, pending_revision: int = 0) -> dict:
         """Player joins a round with chosen cartelas (max 2).
         Serialized per round via asyncio.Lock to prevent DB lock contention and RAM spikes under high concurrency.
         """
@@ -254,7 +258,8 @@ class RoundEngine:
         async with self._user_locks[user_id]:
             async with self._round_locks[round_id]:
                 return await asyncio.to_thread(
-                    self.join_round_sync, round_id, user_id, cartela_numbers, user_name
+                    self.join_round_sync, round_id, user_id, cartela_numbers, user_name,
+                    require_pending, pending_revision,
                 )
 
     async def start_round(self, round_id: str) -> dict:
