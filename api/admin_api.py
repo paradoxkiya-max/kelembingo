@@ -1355,6 +1355,8 @@ def _mutate_pending_selection_sync(
         f"pending_{action}",
         _apply,
         lock_keys=[f"round:{round_id}", f"user:{user_id}"],
+        lock_timeout_ms=2500,
+        statement_timeout_ms=5000,
     )
 
 

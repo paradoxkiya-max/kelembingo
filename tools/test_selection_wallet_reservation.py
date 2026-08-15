@@ -96,6 +96,8 @@ assert "selected_cartelas" in gateway and "pending_revision" in gateway
 assert 'if collection == "rounds" and doc_id:' in gateway
 assert '}, to=sid)' in gateway and '"pending_revision": int(round_data.get("pending_revision", 0) or 0)' in gateway
 assert '"pending_revision": int(rd.get(\'pending_revision\', 0) or 0)' in gateway
+assert 'lock_timeout_ms=2500' in gateway and 'statement_timeout_ms=5000' in gateway
+assert 'lock_timeout_ms=None' in (ROOT / 'firestore_db.py').read_text()
 assert 'pool_snapshot = {' in gateway
 assert '"pending_selections": result.get(\'_pending\', {})' in gateway
 assert '"selected_cartelas": result.get("selected_cartelas", [])' in gateway

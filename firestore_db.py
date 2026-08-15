@@ -211,7 +211,7 @@ def _ensure_account_lock(session, key: str):
     session.execute(statement)
 
 
-def run_idempotent(operation_key: str, operation: str, callback, lock_key=None, lock_keys=None):
+def run_idempotent(operation_key: str, operation: str, callback, lock_key=None, lock_keys=None, lock_timeout_ms=None, statement_timeout_ms=None):
     """Run a transaction once across processes and return the stored result on retry.
 
     The callback receives a repository Transaction. Its document writes and the
@@ -221,6 +221,11 @@ def run_idempotent(operation_key: str, operation: str, callback, lock_key=None, 
     """
     sess = SessionLocal()
     try:
+        if engine.dialect.name == "postgresql":
+            if lock_timeout_ms is not None:
+                sess.execute(sqlalchemy.text(f"SET LOCAL lock_timeout = '{int(lock_timeout_ms)}ms'"))
+            if statement_timeout_ms is not None:
+                sess.execute(sqlalchemy.text(f"SET LOCAL statement_timeout = '{int(statement_timeout_ms)}ms'"))
         requested_locks = list(lock_keys or [])
         if lock_key is not None:
             requested_locks.append(lock_key)
