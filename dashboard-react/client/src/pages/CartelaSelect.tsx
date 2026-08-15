@@ -34,7 +34,7 @@ export default function CartelaSelect() {
   const previewFetches = useRef(new Set<number>());
 
   const wallet = walletValue(player?.play_wallet);
-  const poolEstimate = Math.round(((round?.player_count || 0) + selected.length) * stake * 0.75 * 10) / 10;
+  const poolEstimate = Math.round(((round?.player_count || 0) + selected.length) * stake * 0.80 * 10) / 10;
 
   useEffect(() => {
     let active = true;

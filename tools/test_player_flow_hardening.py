@@ -34,7 +34,7 @@ assert "role=\"alert\"" in wallet
 assert "formatGatewayError" in wallet and "formatGatewayError(response.error" in wallet
 assert "export function formatGatewayError" in gateway
 assert 'detail?: unknown }).detail' not in gateway
-assert "prize_per_winner': total_pool * 0.75" in round_engine
+assert "prize_per_winner': total_pool * DERASH_RATIO" in round_engine
 assert "'winner_name': player_name" in round_engine
 
 print("player flow hardening contract check: PASS")

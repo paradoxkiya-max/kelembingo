@@ -27,7 +27,8 @@ logger = logging.getLogger(__name__)
 TOTAL_CARTELAS = 500
 DEFAULT_STAKE = 10
 VALID_STAKES = [10, 20]
-ADMIN_CUT_RATIO = 0.25          # 25% of pool goes to admin
+DERASH_RATIO = 0.80             # 80% of pool is paid as Derash
+ADMIN_CUT_RATIO = 0.20          # 20% of pool goes to admin
 SELECTION_DURATION = 45          # seconds for card selection phase
 NUMBER_CALL_INTERVAL = 5        # seconds between each called number (5s countdown)
 MAX_CARTELAS_PER_PLAYER = 2
@@ -269,7 +270,7 @@ class RoundEngine:
         player_count = data.get('player_count', 0)
         round_stake = data.get('stake', DEFAULT_STAKE)
         total_pool = player_count * round_stake
-        derash = total_pool * 0.75
+        derash = total_pool * DERASH_RATIO
 
         now = datetime.now(tz=timezone.utc)
         game_target = self.normalize_game_target(data.get('game_target'))
@@ -699,8 +700,8 @@ class RoundEngine:
                 'winners': [uid_str],
                 'winner_name': player_name,
                 'winning_cartela': canonical_cartela,
-                'prize_per_winner': total_pool * 0.75,
-                'admin_profit': total_pool * 0.25,
+                'prize_per_winner': total_pool * DERASH_RATIO,
+                'admin_profit': total_pool * ADMIN_CUT_RATIO,
                 'completion_reason': completion_reason,
                 'completed_at': now,
             })
@@ -710,7 +711,7 @@ class RoundEngine:
                 'winner_ids': [int(user_id)],
                 'winner_name': player_name,
                 'winning_cartela': canonical_cartela,
-                'prize_per_winner': total_pool * 0.75,
+                'prize_per_winner': total_pool * DERASH_RATIO,
                 'already_completed': False,
             }
 
@@ -825,8 +826,8 @@ class RoundEngine:
             player_count = data.get('player_count', 0)
             round_stake = data.get('stake', DEFAULT_STAKE)
             total_pool = player_count * round_stake
-            derash = total_pool * 0.75
-            admin_profit = total_pool * 0.25
+            derash = total_pool * DERASH_RATIO
+            admin_profit = total_pool * ADMIN_CUT_RATIO
 
             # Only joined players may win, and duplicate IDs count once.
             players = data.get('players', {}) or {}
