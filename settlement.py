@@ -255,6 +255,7 @@ def join_round(
     max_cartelas=2,
     total_cartelas=75,
     idempotency_key=None,
+    require_pending=False,
 ):
     """Join a round and reserve cards with one durable account/round transaction."""
     round_id = str(round_id)
@@ -296,6 +297,16 @@ def join_round(
         if len(combined_cartelas) > int(max_cartelas):
             return {"error": f"Maximum {max_cartelas} cartelas allowed"}
         added_cartelas = [number for number in combined_cartelas if number not in existing_cartelas]
+
+        if require_pending:
+            pending = round_data.get("pending_selections", {}) or {}
+            pending_numbers = pending.get(uid_str, []) if isinstance(pending, dict) else []
+            try:
+                allowed_pending = {int(number) for number in pending_numbers}
+            except (TypeError, ValueError):
+                allowed_pending = set()
+            if not set(added_cartelas).issubset(allowed_pending):
+                return {"error": "Cartela selection was cancelled before round finalization"}
 
         if status == "playing":
             pending = round_data.get("pending_selections", {}) or {}

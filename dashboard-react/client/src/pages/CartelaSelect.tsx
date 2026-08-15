@@ -1,12 +1,13 @@
 // Style reminder: replicate legacy card-select.html: compact Back/title row, three summary chips, eight-column touch grid, selected previews, timer bar, and Cancel footer.
 
-import { ArrowLeft, Check, Loader2 } from "lucide-react";
+import { ArrowLeft, Check, Loader2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useSearch } from "wouter";
 import { usePlayer } from "@/contexts/PlayerContext";
 import { playerApi, type Cartela, type Round } from "@/lib/gateway";
 import { walletValue } from "@/lib/format";
 import { observeCartelaPool, observeRound, primeRoundSnapshot } from "@/lib/realtime";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const STAKES = [10, 20];
 const MAX_SELECTIONS = 2;
@@ -34,6 +35,7 @@ export default function CartelaSelect() {
   const [walletPreview, setWalletPreview] = useState<number | null>(null);
   const [committedWallet, setCommittedWallet] = useState<number | null>(null);
   const [liveDerashPool, setLiveDerashPool] = useState<number | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const confirmStarted = useRef(false);
   const previewFetches = useRef(new Set<number>());
 
@@ -142,6 +144,8 @@ export default function CartelaSelect() {
         setCommittedWallet(balance);
         applyPlayWallet(balance);
       }
+      if (isSelected) setConfirmOpen(false);
+      else setConfirmOpen(true);
     } catch (e) {
       setSelected((items) => isSelected ? [...items, number] : items.filter((item) => item !== number));
       setLiveDerashPool(null);
@@ -183,7 +187,7 @@ export default function CartelaSelect() {
     <div className="card-select-grid-enhanced flex-1 overflow-y-auto px-2 py-2 [contain:layout_style]" aria-label="Available cartelas">{loading ? <div className="flex items-center justify-center py-16 text-sm text-white/35"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading cartelas</div> : loadError ? <div className="px-4 py-12 text-center text-xs text-red-300">{loadError}</div> : <div className="grid grid-cols-8 content-start gap-1.5 max-[360px]:grid-cols-7 max-[360px]:gap-1">{visibleCartelas.map((card) => { const isSelected = selected.includes(card.number); const isPendingTaken = Object.entries(pending).some(([uid, numbers]) => uid !== String(player?.user_id || "") && numbers.includes(card.number)); const isTaken = !isSelected && (taken.has(card.number) || isPendingTaken || Boolean(card.taken) || card.status === "taken"); return <button key={card.number} disabled={isTaken} onClick={() => void toggleCard(card.number)} aria-label={`Cartela ${card.number}${isTaken ? ", taken" : isSelected ? ", selected" : ""}`} className={`relative aspect-square rounded-lg border text-[13px] font-extrabold transition-transform active:scale-[0.92] ${isTaken ? "pointer-events-none border-[#FF8C00] bg-[#FF8C00]/25 text-[#FFB45C] shadow-[0_0_12px_rgba(255,140,0,0.35)]" : isSelected ? "z-[1] scale-[1.04] border-emerald-400/60 bg-gradient-to-br from-[#10B981] to-[#059669] text-white shadow-[0_0_16px_rgba(16,185,129,0.45)]" : "border-white/10 bg-gradient-to-br from-[#1E2340] to-[#151833] text-white shadow-[0_2px_8px_rgba(0,0,0,0.3)]"}`}>{isSelected ? <Check className="mx-auto h-4 w-4" /> : isTaken ? <span className="text-[10px]">TAKEN</span> : card.number}</button>; })}</div>}</div>
     {selected.length > 0 && <div className="sticky bottom-0 z-20 border-t border-orange-400/30 bg-[#0e1026]/95 px-3 py-2 shadow-[0_-10px_25px_rgba(0,0,0,0.35)] backdrop-blur-md"><div className="mb-1 text-center text-[10px] font-black uppercase tracking-[0.2em] text-orange-300">Selected cartelas</div><div className="flex justify-center gap-2">{selected.map((number) => { const card = cartelas.find((item) => item.number === number); return <MiniPreview key={number} card={card} />; })}</div></div>}
     {error && <div className="mx-3 mb-1 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-[11px] text-red-300" role="alert">{error}</div>}
-    <div className="border-t border-white/5 bg-[#0a0f1d] pb-4"><div className={`items-center justify-between px-4 py-2 text-xs ${selected.length ? "flex" : "hidden"}`}><span className="font-semibold text-gray-400">Selected: <span className="font-bold text-emerald-400">{selected.length}/{MAX_SELECTIONS}</span> cards</span><span className="font-semibold text-gray-400">Total Cost: <span className="font-bold text-orange-400">{selected.length * stake} ETB</span></span></div><div className="grid grid-cols-2 gap-2 px-4 py-2"><button onClick={() => navigate("/", { replace: true })} disabled={busy} className="rounded-xl bg-white/10 py-3 text-sm font-bold text-white transition-colors hover:bg-white/20 disabled:opacity-50">Cancel</button><button onClick={() => void confirmSelection()} disabled={busy || !selected.length || expired} className="rounded-xl bg-gradient-to-r from-[#FF9800] to-[#FF6D00] py-3 text-sm font-black text-white shadow-[0_8px_20px_rgba(255,140,0,0.2)] transition-transform active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45">{busy ? "Joining…" : "Play now"}</button></div></div>
+    <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}><DialogContent className="w-[calc(100%-2rem)] max-w-sm border border-orange-400/30 bg-[#10142d] p-0 text-white shadow-[0_20px_60px_rgba(0,0,0,0.55)]"><DialogHeader className="border-b border-white/10 px-5 pb-3 pt-5 text-left"><DialogTitle className="text-base font-black text-white">Confirm selected cartela{selected.length === 1 ? "" : "s"}</DialogTitle><DialogDescription className="text-xs leading-5 text-white/55">Your stake is already reserved safely. You can play this card set now, or cancel any card before the selection timer closes.</DialogDescription></DialogHeader><div className="px-5 py-4"><div className="flex items-center justify-between rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-xs"><span className="font-semibold text-white/70">Selected cards</span><span className="font-black text-emerald-300">{selected.length}/{MAX_SELECTIONS}</span></div><div className="mt-3 flex justify-center gap-2">{selected.map((number) => <button key={number} type="button" onClick={() => void toggleCard(number)} disabled={selectionPending || busy} className="group relative w-[45%] max-w-[145px] transition-transform active:scale-[0.97] disabled:opacity-50"><MiniPreview card={cartelas.find((item) => item.number === number)} /><span className="absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-full border border-red-300/40 bg-red-500/85 text-white shadow-lg"><X className="h-3.5 w-3.5" /></span><span className="mt-1 block text-[10px] font-bold text-red-300">Cancel this card</span></button>)}</div></div><DialogFooter className="grid grid-cols-2 gap-2 border-t border-white/10 bg-black/10 px-5 py-4"><button type="button" onClick={() => setConfirmOpen(false)} className="rounded-xl border border-white/15 bg-white/5 py-2.5 text-xs font-bold text-white">Keep selecting</button><button type="button" onClick={() => void confirmSelection()} disabled={busy || !selected.length || expired} className="rounded-xl bg-gradient-to-r from-[#FF9800] to-[#FF6D00] py-2.5 text-xs font-black text-white disabled:opacity-45">{busy ? "Joining…" : "Join game"}</button></DialogFooter></DialogContent></Dialog>
   </div>;
 }
 

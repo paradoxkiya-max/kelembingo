@@ -56,6 +56,30 @@ with tempfile.TemporaryDirectory() as tmp:
         round_data = db.collection("rounds").document(round_id).get().to_dict()
         assert round_data["players"]["77"]["cartelas"] == [12], round_data
         assert round_data["pending_reservations"]["77"] == [], round_data
+
+        cancelled_round = "cancelled-before-finalizer"
+        db.collection("users").document("88").set({
+            "play_wallet": 100,
+            "is_playing": False,
+            "active_round_id": None,
+        })
+        db.collection("rounds").document(cancelled_round).set({
+            "status": "selecting",
+            "stake": 10,
+            "players": {},
+            "player_count": 0,
+            "taken_cartelas": [],
+            "pending_selections": {"88": []},
+            "pending_reservations": {"88": []},
+        })
+        stale_finalizer = join_round(
+            db, cancelled_round, 88, [11], "Player 88",
+            idempotency_key="stale-finalizer", require_pending=True,
+        )
+        assert stale_finalizer.get("error") == "Cartela selection was cancelled before round finalization", stale_finalizer
+        cancelled_data = db.collection("rounds").document(cancelled_round).get().to_dict()
+        assert cancelled_data["players"] == {} and cancelled_data["player_count"] == 0, cancelled_data
+        assert db.collection("users").document("88").get().to_dict()["play_wallet"] == 100
     finally:
         admin_api.db = original_db
 
@@ -67,6 +91,7 @@ assert "pending_reservations" in gateway
 assert 'lock_keys=[f"round:{round_id}", f"user:{user_id}"]' in gateway
 assert "await broadcast_event('users', uid_str)" in gateway
 assert "derash_pool" in gateway
+assert "require_pending=True" in gateway
 assert "applyPlayWallet" in context
 assert "walletPreview" in selection and "optimisticPool" in selection
 assert "liveDerashPool" in selection

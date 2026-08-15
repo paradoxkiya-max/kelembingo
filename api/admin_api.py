@@ -692,7 +692,14 @@ async def _finalize_pending_selections(round_id: str, round_data: dict) -> None:
         user = await _db(lambda: _read_user_sync(user_id))
         username = str((user or {}).get('username') or '').strip()
         user_name = f"@{username.lstrip('@')}" if username else (user or {}).get('first_name') or 'Player'
-        result = await engine.join_round(round_id, user_id, selected, user_name)
+        result = await engine.join_round(
+            round_id,
+            user_id,
+            selected,
+            user_name,
+            require_pending=True,
+            pending_revision=int(round_data.get('pending_revision', 0) or 0),
+        )
         if result.get('error') and result.get('error') != 'You already joined this round':
             logger.info('[GameLoop] pending join skipped for round %s user %s: %s', round_id, user_id, result.get('error'))
 
@@ -1321,6 +1328,7 @@ def _mutate_pending_selection_sync(
         transaction.update(round_ref, {
             'pending_selections': pending,
             'pending_reservations': reservations,
+            'pending_revision': int(round_data.get('pending_revision', 0) or 0) + 1,
         })
         if wallet_changed:
             transaction.update(user_ref, {
