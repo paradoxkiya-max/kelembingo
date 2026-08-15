@@ -38,6 +38,10 @@ with tempfile.TemporaryDirectory() as tmp:
         first = admin_api._mutate_pending_selection_sync(round_id, "77", 12, True, "first")
         assert first["ok"] and first["play_wallet"] == 90 and first["_derash"] == 8 and first["selected_cartelas"] == [12], first
         assert db.collection("users").document("77").get().to_dict()["play_wallet"] == 90
+        persisted_first = db.collection("rounds").document(round_id).get().to_dict()
+        assert persisted_first["pending_selections"]["77"] == [12]
+        assert persisted_first["pending_reservations"]["77"] == [12]
+        assert persisted_first["pending_revision"] == first["_revision"]
 
         duplicate = admin_api._mutate_pending_selection_sync(round_id, "77", 12, True, "second-request")
         assert duplicate["ok"] and duplicate["play_wallet"] == 90, duplicate
@@ -45,11 +49,22 @@ with tempfile.TemporaryDirectory() as tmp:
 
         second = admin_api._mutate_pending_selection_sync(round_id, "77", 35, True, "third")
         assert second["ok"] and second["play_wallet"] == 80 and second["_derash"] == 16 and second["selected_cartelas"] == [12, 35], second
+        persisted_second = db.collection("rounds").document(round_id).get().to_dict()
+        assert persisted_second["pending_selections"]["77"] == [12, 35]
+        assert persisted_second["pending_reservations"]["77"] == [12, 35]
+        assert persisted_second["pending_revision"] == second["_revision"]
 
         released_first = admin_api._mutate_pending_selection_sync(round_id, "77", 12, False, "fourth")
         assert released_first["ok"] and released_first["play_wallet"] == 90 and released_first["selected_cartelas"] == [35], released_first
+        persisted_after_first_release = db.collection("rounds").document(round_id).get().to_dict()
+        assert persisted_after_first_release["pending_selections"]["77"] == [35]
+        assert persisted_after_first_release["pending_reservations"]["77"] == [35]
+
         released_second = admin_api._mutate_pending_selection_sync(round_id, "77", 35, False, "fifth")
         assert released_second["ok"] and released_second["play_wallet"] == 100 and released_second["_derash"] == 0 and released_second["selected_cartelas"] == [], released_second
+        persisted_empty = db.collection("rounds").document(round_id).get().to_dict()
+        assert persisted_empty["pending_selections"]["77"] == []
+        assert persisted_empty["pending_reservations"]["77"] == []
 
         reselect_first = admin_api._mutate_pending_selection_sync(round_id, "77", 12, True, "sixth")
         reselect_second = admin_api._mutate_pending_selection_sync(round_id, "77", 35, True, "seventh")
