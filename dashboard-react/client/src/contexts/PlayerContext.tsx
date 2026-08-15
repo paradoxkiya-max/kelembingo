@@ -5,7 +5,7 @@ import { playerApi, type Player, type PublicStats } from "@/lib/gateway";
 import { observePlayer } from "@/lib/realtime";
 
 export type TelegramAuthState = "detecting" | "browser" | "telegram-no-init-data" | "authenticating" | "authenticated" | "auth-failed";
-type PlayerContextValue = { player: Player | null; stats: PublicStats | null; loading: boolean; telegramAvailable: boolean; telegramState: TelegramAuthState; authError: string; refresh: () => Promise<void>; logout: () => void };
+type PlayerContextValue = { player: Player | null; stats: PublicStats | null; loading: boolean; telegramAvailable: boolean; telegramState: TelegramAuthState; authError: string; refresh: () => Promise<void>; applyPlayWallet: (balance: number) => void; logout: () => void };
 const PlayerContext = createContext<PlayerContextValue | null>(null);
 function webApp() { return (window as Window & { Telegram?: { WebApp?: { initData?: string; ready?: () => void; expand?: () => void } } }).Telegram?.WebApp; }
 
@@ -37,7 +37,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     void playerApi.reconcile().then((result) => applyPlayer(result.user)).catch(() => undefined);
     return unsubscribe;
   }, [player?.id, player?.user_id]);
-  const value = useMemo(() => ({ player, stats, loading, telegramAvailable: telegramState !== "browser" && telegramState !== "detecting", telegramState, authError, refresh, logout: () => { window.localStorage.removeItem("kelembingo.playerToken"); setPlayer(null); setTelegramState("telegram-no-init-data"); } }), [player, stats, loading, telegramState, authError, refresh]);
+  const applyPlayWallet = useCallback((balance: number) => { if (!Number.isFinite(balance)) return; setPlayer((current) => current ? { ...current, play_wallet: balance } : current); }, []);
+  const value = useMemo(() => ({ player, stats, loading, telegramAvailable: telegramState !== "browser" && telegramState !== "detecting", telegramState, authError, refresh, applyPlayWallet, logout: () => { window.localStorage.removeItem("kelembingo.playerToken"); setPlayer(null); setTelegramState("telegram-no-init-data"); } }), [player, stats, loading, telegramState, authError, refresh, applyPlayWallet]);
   return <PlayerContext.Provider value={value}>{children}</PlayerContext.Provider>;
 }
 export function usePlayer() { const value = useContext(PlayerContext); if (!value) throw new Error("usePlayer must be used inside PlayerProvider"); return value; }

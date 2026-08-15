@@ -313,7 +313,7 @@ def join_round(
             if isinstance(started_at, datetime) and started_at.tzinfo is None:
                 started_at = started_at.replace(tzinfo=timezone.utc)
             grace_ended = not isinstance(started_at, datetime) or datetime.now(tz=timezone.utc) > started_at + timedelta(seconds=5)
-            if called or grace_ended or not set(selected).issubset(allowed_numbers):
+            if called or grace_ended or not set(added_cartelas).issubset(allowed_numbers):
                 return {"error": "Round is no longer accepting players"}
         elif status != "selecting":
             return {"error": "Round is no longer accepting players"}
@@ -329,7 +329,14 @@ def join_round(
             return {"error": "Invalid round stake"}
         if not math.isfinite(round_stake) or round_stake < 0:
             return {"error": "Invalid round stake"}
-        total_cost = round_stake * len(added_cartelas)
+        raw_reservations = round_data.get("pending_reservations", {}) or {}
+        reservation_numbers = raw_reservations.get(uid_str, []) if isinstance(raw_reservations, dict) else []
+        try:
+            reserved_cartelas = {int(number) for number in reservation_numbers}
+        except (TypeError, ValueError):
+            reserved_cartelas = set()
+        newly_chargeable = [number for number in added_cartelas if number not in reserved_cartelas]
+        total_cost = round_stake * len(newly_chargeable)
         user_ref = db.collection("users").document(uid_str)
         user_doc = transaction.get(user_ref)
         if not user_doc.exists:
@@ -370,7 +377,7 @@ def join_round(
 
         now = datetime.now(tz=timezone.utc)
         transaction.update(user_ref, {
-            "play_wallet": wallet - total_cost,
+            "play_wallet": round(wallet - total_cost, 2),
             "is_playing": True,
             "active_round_id": round_id,
             "updated_at": now,
@@ -389,14 +396,19 @@ def join_round(
         }
         if status == "playing":
             round_updates["derash"] = (int(round_data.get("player_count", 0) or 0) + len(added_cartelas)) * round_stake * 0.80
-        if status == "playing" and isinstance(round_data.get("pending_selections"), dict):
+        if isinstance(round_data.get("pending_selections"), dict):
             pending = dict(round_data.get("pending_selections") or {})
-            pending.pop(uid_str, None)
+            pending[uid_str] = [number for number in pending.get(uid_str, []) if str(number).isdigit() and int(number) not in added_cartelas]
             round_updates["pending_selections"] = pending
+        if isinstance(raw_reservations, dict):
+            reservations = dict(raw_reservations)
+            reservations[uid_str] = [number for number in reservation_numbers if str(number).isdigit() and int(number) not in added_cartelas]
+            round_updates["pending_reservations"] = reservations
         transaction.update(round_ref, round_updates)
         return {
             "status": "expanded" if existing_cartelas and added_cartelas else "joined",
             "cost": total_cost,
+            "reserved_cost": round_stake * len([number for number in added_cartelas if number in reserved_cartelas]),
             "cartelas": combined_cartelas,
             "player_count": int(round_data.get("player_count", 0) or 0) + len(added_cartelas),
         }
