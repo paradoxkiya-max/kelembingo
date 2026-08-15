@@ -2757,6 +2757,20 @@ async def subscribe(sid, data):
                 return {"ok": False, "error": "Forbidden"}
     room = f"{collection}:{doc_id}" if doc_id else collection
     await sio.enter_room(sid, room)
+    if collection == "rounds" and doc_id:
+        round_snap = await asyncio.to_thread(lambda: db.collection("rounds").document(str(doc_id)).get())
+        if round_snap.exists:
+            round_data = round_snap.to_dict()
+            pool = _cartela_pool_snapshot(round_data)
+            await sio.emit("cartela_pool", {
+                "type": "cartela_pool",
+                "round_id": str(doc_id),
+                "taken_cartelas": round_data.get("taken_cartelas", []),
+                "player_count": pool["player_count"],
+                "derash_pool": pool["derash_pool"],
+                "pending_revision": int(round_data.get("pending_revision", 0) or 0),
+                "pending_selections": round_data.get("pending_selections", {}),
+            }, to=sid)
     return {"ok": True}
 
 @sio.event
@@ -2862,6 +2876,7 @@ async def broadcast_cartela_pool(round_id: str):
             "taken_cartelas": rd.get('taken_cartelas', []),
             "player_count": pool['player_count'],
             "derash_pool": pool['derash_pool'],
+            "pending_revision": int(rd.get('pending_revision', 0) or 0),
             "pending_selections": rd.get('pending_selections', {}),
         }, room=f"rounds:{round_id}")
 

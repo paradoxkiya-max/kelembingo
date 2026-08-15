@@ -93,6 +93,9 @@ assert "await broadcast_event('users', uid_str)" in gateway
 assert "derash_pool" in gateway
 assert "require_pending=True" in gateway
 assert "selected_cartelas" in gateway and "pending_revision" in gateway
+assert 'if collection == "rounds" and doc_id:' in gateway
+assert '}, to=sid)' in gateway and '"pending_revision": int(round_data.get("pending_revision", 0) or 0)' in gateway
+assert '"pending_revision": int(rd.get(\'pending_revision\', 0) or 0)' in gateway
 assert "applyPlayWallet" in context
 assert "walletPreview" in selection and "optimisticPool" in selection
 assert "liveDerashPool" in selection
