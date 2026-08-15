@@ -20,7 +20,7 @@ from config import db, BOT_TOKEN
 from firestore_db import MockFirestoreClient, SessionLocal, SystemEvent, FieldFilter, Increment, ArrayUnion, engine as db_engine
 from startup_state import is_database_ready
 
-from game.round_engine import RoundEngine, DEFAULT_STAKE, VALID_STAKES, SELECTION_DURATION, GAME_LENGTH_RANGE, _parse_dt, _grid_next_number_at
+from game.round_engine import RoundEngine, DEFAULT_STAKE, VALID_STAKES, SELECTION_DURATION, GAME_LENGTH_RANGE, DERASH_RATIO, _parse_dt, _grid_next_number_at
 from handlers.user_manager import UserManager
 from handlers.bot_content import get_bot_text
 from datetime import datetime, date, timedelta, timezone
@@ -656,7 +656,8 @@ async def _finalize_pending_selections(round_id: str, round_data: dict) -> None:
         if not selected:
             continue
         user = await _db(lambda: _read_user_sync(user_id))
-        user_name = (user or {}).get('first_name') or (user or {}).get('username') or 'Player'
+        username = str((user or {}).get('username') or '').strip()
+        user_name = f"@{username.lstrip('@')}" if username else (user or {}).get('first_name') or 'Player'
         result = await engine.join_round(round_id, user_id, selected, user_name)
         if result.get('error') and result.get('error') != 'You already joined this round':
             logger.info('[GameLoop] pending join skipped for round %s user %s: %s', round_id, user_id, result.get('error'))
@@ -670,7 +671,7 @@ async def _start_playing_round(round_id: str, round_data: dict) -> bool:
     now = datetime.now(tz=timezone.utc)
     round_stake = round_data.get('stake', DEFAULT_STAKE)
     total_pool = player_count * round_stake
-    derash = total_pool * 0.75
+    derash = total_pool * DERASH_RATIO
     await _db(lambda: db.collection('rounds').document(round_id).update({
         'status': 'playing',
         'derash': derash,

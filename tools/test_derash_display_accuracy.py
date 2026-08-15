@@ -20,8 +20,10 @@ assert "DERASH POOL" in game_board
 assert "PRIZE PER WINNER" in game_board
 assert "estimated earnings" in profile.lower()
 
-# The display fix must not alter the authoritative 75% settlement rule.
-assert "derash = total_pool * 0.75" in round_engine
+# The display fix must match the authoritative 80% Derash / 20% admin policy.
+assert "DERASH_RATIO = 0.80" in round_engine
+assert "ADMIN_CUT_RATIO = 0.20" in round_engine
+assert "derash = total_pool * DERASH_RATIO" in round_engine
 assert "prize_per_winner = derash / len(valid_winner_ids)" in round_engine
 
 print("Derash display accuracy regression check: PASS")
