@@ -4,7 +4,8 @@ ROOT = Path(__file__).resolve().parents[1]
 card_select = (ROOT / 'dashboard-react/client/src/pages/CartelaSelect.tsx').read_text()
 game_css = (ROOT / 'dashboard-react/client/src/index.css').read_text()
 
-assert 'visibleCartelas.map' in card_select
+assert 'const CartelaGrid = memo' in card_select
+assert 'CARTELA_POOL.map' in card_select
 assert 'grid-cols-7' in card_select and 'grid-cols-8' in card_select
 assert '[contain:layout_style]' in card_select
 assert 'aria-label={`Cartela' in card_select
