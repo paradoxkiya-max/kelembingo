@@ -46,9 +46,20 @@ with tempfile.TemporaryDirectory() as tmp:
         second = admin_api._mutate_pending_selection_sync(round_id, "77", 35, True, "third")
         assert second["ok"] and second["play_wallet"] == 80 and second["_derash"] == 16 and second["selected_cartelas"] == [12, 35], second
 
-        released = admin_api._mutate_pending_selection_sync(round_id, "77", 35, False, "fourth")
-        assert released["ok"] and released["play_wallet"] == 90 and released["_derash"] == 8 and released["selected_cartelas"] == [12], released
+        released_first = admin_api._mutate_pending_selection_sync(round_id, "77", 12, False, "fourth")
+        assert released_first["ok"] and released_first["play_wallet"] == 90 and released_first["selected_cartelas"] == [35], released_first
+        released_second = admin_api._mutate_pending_selection_sync(round_id, "77", 35, False, "fifth")
+        assert released_second["ok"] and released_second["play_wallet"] == 100 and released_second["_derash"] == 0 and released_second["selected_cartelas"] == [], released_second
 
+        reselect_first = admin_api._mutate_pending_selection_sync(round_id, "77", 12, True, "sixth")
+        reselect_second = admin_api._mutate_pending_selection_sync(round_id, "77", 35, True, "seventh")
+        assert reselect_first["play_wallet"] == 90 and reselect_second["play_wallet"] == 80 and reselect_second["selected_cartelas"] == [12, 35], (reselect_first, reselect_second)
+        release_again_first = admin_api._mutate_pending_selection_sync(round_id, "77", 12, False, "eighth")
+        release_again_second = admin_api._mutate_pending_selection_sync(round_id, "77", 35, False, "ninth")
+        assert release_again_first["selected_cartelas"] == [35] and release_again_second["selected_cartelas"] == [] and release_again_second["play_wallet"] == 100, (release_again_first, release_again_second)
+
+        final_select = admin_api._mutate_pending_selection_sync(round_id, "77", 12, True, "tenth")
+        assert final_select["play_wallet"] == 90 and final_select["selected_cartelas"] == [12], final_select
         joined = join_round(db, round_id, 77, [12], "Player 77", idempotency_key="finalize")
         assert joined["status"] == "joined" and joined["cost"] == 0 and joined["reserved_cost"] == 10, joined
         assert db.collection("users").document("77").get().to_dict()["play_wallet"] == 90

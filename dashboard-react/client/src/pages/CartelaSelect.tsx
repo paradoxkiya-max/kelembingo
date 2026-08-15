@@ -53,6 +53,7 @@ export default function CartelaSelect() {
   const selectedRef = useRef<number[]>([]);
   const authoritativeSelectedRef = useRef<number[]>([]);
   const selectionIntents = useRef<SelectionIntent[]>([]);
+  const previewSlotByCartela = useRef(new Map<number, number>());
   const selectionQueue = useRef<Promise<void>>(Promise.resolve());
   const selectionEpoch = useRef(0);
   const currentRoundId = useRef("");
@@ -71,6 +72,17 @@ export default function CartelaSelect() {
 
   const publishSelected = useCallback((next: number[]) => {
     const normalized = normalizeCartelas(next);
+    const occupied = new Set<number>();
+    normalized.forEach((number, index) => {
+      const existingSlot = previewSlotByCartela.current.get(number);
+      if (existingSlot !== undefined && !occupied.has(existingSlot)) occupied.add(existingSlot);
+      else {
+        const slot = [0, 1].find((candidate) => !occupied.has(candidate)) ?? Math.min(index, 1);
+        previewSlotByCartela.current.set(number, slot);
+        occupied.add(slot);
+      }
+    });
+    for (const number of Array.from(previewSlotByCartela.current.keys())) if (!normalized.includes(number)) previewSlotByCartela.current.delete(number);
     selectedRef.current = normalized;
     setSelected((previous) => previous.length === normalized.length && previous.every((number, index) => number === normalized[index]) ? previous : normalized);
     return normalized;
@@ -248,7 +260,7 @@ export default function CartelaSelect() {
     <div className="flex items-center justify-between border-b border-white/5 px-4 pb-2 pt-4"><button onClick={() => navigate("/")} className="flex items-center gap-1 rounded-lg bg-indigo-600/90 px-3.5 py-1.5 text-xs font-bold text-white shadow-md transition-transform active:scale-[0.97]"><ArrowLeft className="h-3.5 w-3.5" /> Back</button><h3 className="text-sm font-bold tracking-wide text-white">Select Cartela</h3><span className="w-[62px]" /></div>
     <div className="flex items-center justify-between gap-1 border-b border-white/5 bg-[#111326]/60 px-4 py-3 text-[11px] font-semibold text-gray-300"><div className="flex gap-2"><Summary label="PLAY WALLET" value={`${displayedWallet.toLocaleString()} ETB`} tone="text-[#34D399]" /><Summary label="STAKE" value={`${stake} ETB`} tone="text-[#FF8C00]" /><Summary label="DERASH POOL" value={`${sharedDerashPool} ETB`} tone="text-[#8B5CF6]" /></div><div className={`relative flex min-w-[68px] items-center justify-center overflow-hidden rounded-lg border px-3.5 py-1.5 ${expired ? "border-amber-400/30 bg-amber-500/15 text-amber-200" : "border-emerald-500/30 bg-emerald-600/20 text-emerald-400"}`}><div className="absolute inset-y-0 left-0 bg-gradient-to-r from-[#10B981] to-[#34D399] opacity-30 transition-[width] duration-300" style={{ width: `${Math.min(100, Math.max(0, (seconds / SELECTION_SECONDS) * 100))}%` }} /><span className="relative z-10 text-[10px] font-black">{expired ? "CLOSED" : seconds > 0 ? `${seconds}s` : "GO"}</span></div></div>
     <div className="card-select-grid-enhanced flex-1 overflow-y-auto px-2 py-2 [contain:layout_style]" aria-label="Available cartelas">{loading ? <div className="flex items-center justify-center py-16 text-sm text-white/35"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading cartelas</div> : loadError ? <div className="px-4 py-12 text-center text-xs text-red-300">{loadError}</div> : <CartelaGrid selected={selected} pending={pending} taken={taken} playerId={String(player?.user_id || "")} onToggle={toggleCard} />}</div>
-    {selected.length > 0 && <div className="sticky bottom-0 z-20 border-t border-orange-400/30 bg-[#0e1026]/95 px-3 py-2 shadow-[0_-10px_25px_rgba(0,0,0,0.35)] backdrop-blur-md"><div className="mb-1 text-center text-[10px] font-black uppercase tracking-[0.2em] text-orange-300">Selected cartelas</div><p className="mb-2 text-center text-[10px] font-semibold text-white/50">Tap a selected cartela to remove it</p><div className="flex justify-center gap-2">{selected.map((number) => { const card = cartelas.find((item) => item.number === number); return <button key={number} type="button" onClick={() => void toggleCard(number)} disabled={busy || expired} aria-label={`Remove selected Cartela ${number}`} className="w-[46%] max-w-[170px] rounded-lg text-left transition-transform active:scale-[0.97] disabled:opacity-50"><MiniPreview card={card} /><span className="mt-1 block text-center text-[10px] font-bold text-red-300">Tap to remove</span></button>; })}</div></div>}
+    {selected.length > 0 && <div className="sticky bottom-0 z-20 border-t border-orange-400/30 bg-[#0e1026]/95 px-3 py-2 shadow-[0_-10px_25px_rgba(0,0,0,0.35)] backdrop-blur-md"><div className="mb-1 text-center text-[10px] font-black uppercase tracking-[0.2em] text-orange-300">Selected cartelas</div><p className="mb-2 text-center text-[10px] font-semibold text-white/50">Tap a selected cartela to remove it</p><div className="grid grid-cols-2 justify-items-center gap-2">{[0, 1].map((slot) => { const number = selected.find((candidate) => previewSlotByCartela.current.get(candidate) === slot); const card = number === undefined ? undefined : cartelas.find((item) => item.number === number); return number === undefined ? <div key={`empty-slot-${slot}`} className="w-[46%] max-w-[170px]" aria-hidden="true" /> : <button key={number} type="button" onClick={() => void toggleCard(number)} disabled={busy || expired} aria-label={`Remove selected Cartela ${number}`} className="w-[46%] max-w-[170px] rounded-lg text-left transition-transform active:scale-[0.97] disabled:opacity-50"><MiniPreview card={card} /><span className="mt-1 block text-center text-[10px] font-bold text-red-300">Tap to remove</span></button>; })}</div></div>}
     {error && <div className="mx-3 mb-1 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-[11px] text-red-300" role="alert">{error}</div>}
   </div>;
 }

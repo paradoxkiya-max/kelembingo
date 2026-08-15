@@ -31,6 +31,7 @@ assert "confirmOpen" not in select and "<Dialog" not in select
 assert "Tap a selected cartela to remove it" in select
 assert 'aria-label={`Remove selected Cartela ${number}`}' in select
 assert 'onClick={() => void toggleCard(number)}' in select
+assert 'previewSlotByCartela' in select and 'selected.find((candidate) => previewSlotByCartela.current.get(candidate) === slot)' in select
 
 assert "@/components/ui/switch" in game
 assert "Auto mark" in game
