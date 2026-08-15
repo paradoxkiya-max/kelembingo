@@ -11,7 +11,7 @@ context = (ROOT / "dashboard-react/client/src/contexts/PlayerContext.tsx").read_
 round_engine = (ROOT / "game/round_engine.py").read_text()
 
 assert 'navigate("/", { replace: true })' in game
-assert '"Syncing…"' in game and '"Starting…"' in game
+assert '"Go"' in game and '"Syncing…"' not in game and '"Starting…"' not in game
 assert "window.setInterval(syncClock, 1000)" in game
 assert "Spectating mode" in game
 assert "playerApi.cartela(number)" in game
