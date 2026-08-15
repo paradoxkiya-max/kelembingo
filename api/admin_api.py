@@ -1369,16 +1369,23 @@ async def select_cartela(round_id: str, req: SelectRequest, request: Request):
         raise HTTPException(status_code=400, detail=result['error'])
     await broadcast_event('users', uid_str)
     # Broadcast directly with data we already have — no extra DB read
-    await sio.emit('cartela_pool', {
+    pool_snapshot = {
         "type": "cartela_pool",
         "round_id": round_id,
-        "taken_cartelas": result.pop('_taken', []),
-        "player_count": result.pop('_pc', 0),
-        "derash_pool": result.pop('_derash', 0),
-        "pending_revision": result.pop('_revision', 0),
-        "pending_selections": result.pop('_pending', {}),
-    }, room=f"rounds:{round_id}")
-    return result
+        "taken_cartelas": result.get('_taken', []),
+        "player_count": result.get('_pc', 0),
+        "derash_pool": result.get('_derash', 0),
+        "pending_revision": result.get('_revision', 0),
+        "pending_selections": result.get('_pending', {}),
+    }
+    await sio.emit('cartela_pool', pool_snapshot, room=f"rounds:{round_id}")
+    return {
+        "ok": True,
+        "play_wallet": result.get("play_wallet"),
+        "selected_cartelas": result.get("selected_cartelas", []),
+        "reserved_cartelas": result.get("reserved_cartelas", []),
+        **pool_snapshot,
+    }
 
 
 @app.post("/api/rounds/{round_id}/unselect")
@@ -1391,16 +1398,23 @@ async def unselect_cartela(round_id: str, req: SelectRequest, request: Request):
     if 'error' in result:
         raise HTTPException(status_code=400, detail=result['error'])
     await broadcast_event('users', uid_str)
-    await sio.emit('cartela_pool', {
+    pool_snapshot = {
         "type": "cartela_pool",
         "round_id": round_id,
-        "taken_cartelas": result.pop('_taken', []),
-        "player_count": result.pop('_pc', 0),
-        "derash_pool": result.pop('_derash', 0),
-        "pending_revision": result.pop('_revision', 0),
-        "pending_selections": result.pop('_pending', {}),
-    }, room=f"rounds:{round_id}")
-    return result
+        "taken_cartelas": result.get('_taken', []),
+        "player_count": result.get('_pc', 0),
+        "derash_pool": result.get('_derash', 0),
+        "pending_revision": result.get('_revision', 0),
+        "pending_selections": result.get('_pending', {}),
+    }
+    await sio.emit('cartela_pool', pool_snapshot, room=f"rounds:{round_id}")
+    return {
+        "ok": True,
+        "play_wallet": result.get("play_wallet"),
+        "selected_cartelas": result.get("selected_cartelas", []),
+        "reserved_cartelas": result.get("reserved_cartelas", []),
+        **pool_snapshot,
+    }
 
 
 @app.post("/api/rounds/{round_id}/close-empty")

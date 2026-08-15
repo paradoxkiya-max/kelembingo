@@ -96,9 +96,16 @@ assert "selected_cartelas" in gateway and "pending_revision" in gateway
 assert 'if collection == "rounds" and doc_id:' in gateway
 assert '}, to=sid)' in gateway and '"pending_revision": int(round_data.get("pending_revision", 0) or 0)' in gateway
 assert '"pending_revision": int(rd.get(\'pending_revision\', 0) or 0)' in gateway
+assert 'pool_snapshot = {' in gateway
+assert '"pending_selections": result.get(\'_pending\', {})' in gateway
+assert '"selected_cartelas": result.get("selected_cartelas", [])' in gateway
 assert "applyPlayWallet" in context
-assert "walletPreview" in selection and "optimisticPool" in selection
+assert "walletPreview" in selection and "setLiveDerashPool(Math.round" in selection
 assert "liveDerashPool" in selection
-assert "pendingRevision" in selection and "setSelected(normalizeCartelas(result.selected_cartelas" in selection
+assert "pendingRevision" in selection and "applyPoolSnapshot(result)" in selection
+assert "selectionQueue" in selection and "selectionIntents" in selection and "replayIntents" in selection
+assert "applyPoolSnapshot" in selection and "selectionEpoch" in selection
+assert "const CartelaGrid = memo" in selection and "pendingTaken" in selection
+assert "request_id: requestId" in (ROOT / "dashboard-react" / "client" / "src" / "lib" / "gateway.ts").read_text()
 
 print("selection wallet reservation regression check: PASS")
