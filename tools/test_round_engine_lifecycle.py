@@ -67,7 +67,10 @@ with tempfile.TemporaryDirectory() as tmp:
     calls = [asyncio.run(engine.call_number("round-calls")) for _ in range(16)]
     assert all(isinstance(number, int) for number in calls), calls
     assert len(set(calls)) == 16, calls
-    assert len(db.collection("rounds").document("round-calls").get().to_dict()["called_numbers"]) == 16
+    round_calls_data = db.collection("rounds").document("round-calls").get().to_dict()
+    assert len(round_calls_data["called_numbers"]) == 16
+    assert "target_winner" not in round_calls_data
+    assert "draw_secret" not in round_calls_data
 
     db.collection("cartelas_master").document("2").set({
         "number": 2,
@@ -131,5 +134,10 @@ with tempfile.TemporaryDirectory() as tmp:
     assert refunded_user["play_wallet"] == 10, refunded_user
     assert refunded_user["total_games"] == 3, refunded_user
     assert refunded_user["losses"] == 3, refunded_user
+
+round_source = (ROOT / "game" / "round_engine.py").read_text()
+assert "round-specific unbiased permutation" in round_source
+assert "hmac.new" in round_source
+assert "target_winner" not in round_source.split("def _call_number_sync", 1)[1].split("def get_cartela_patterns", 1)[0]
 
 print("round-engine lifecycle regression check: PASS")

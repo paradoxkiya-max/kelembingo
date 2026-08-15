@@ -86,6 +86,9 @@ with tempfile.TemporaryDirectory() as tmp:
     two_card_round = db.collection("rounds").document("round-two-cards").get().to_dict()
     assert two_card_round["winners"] == ["1"], two_card_round
     assert two_card_round["winning_cartela"] == 2, two_card_round
+    second_cartela_claim = asyncio.run(engine.claim_bingo("round-two-cards", 1, 1))
+    assert second_cartela_claim.get("winner") is False, second_cartela_claim
+    assert second_cartela_claim.get("error") == "This round was won with another cartela", second_cartela_claim
 
     rejected = asyncio.run(engine.end_round("round-two-cards", [1, 2]))
     assert rejected.get("error") == "Exactly one winner is required", rejected
@@ -103,6 +106,8 @@ assert "_latest_event_cursor" in admin_source
 assert "from sqlalchemy import and_, or_, text as sql_text" in admin_source
 assert "_last_broadcast_fingerprints" in admin_source
 assert "Exactly one winner is required" in round_source
+assert "This round was won with another cartela" in round_source
+assert "choose_single_winning_cartela" in round_source
 assert "claim-bingo" in admin_source
 assert "subscribe" in realtime_source
 assert "reconnection" in realtime_source

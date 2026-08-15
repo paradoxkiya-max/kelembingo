@@ -6,6 +6,7 @@ and prize distribution.
 """
 
 import random
+import os
 import asyncio
 import logging
 import uuid
@@ -348,16 +349,23 @@ class RoundEngine:
 
     def evaluate_winners(self, player_cartelas: Dict[str, List[dict]],
                           called_numbers: List[int]) -> List[dict]:
+        """Return at most one winning cartela for each player.
+
+        A player may own two cartelas, but the round engine exposes only one
+        canonical cartela candidate for that player. The atomic completion
+        transaction still decides the single round winner and persists exactly
+        one winning_cartela.
+        """
         called_set = set(called_numbers)
         winners = []
         for uid_str, cartelas in player_cartelas.items():
-            for entry in cartelas:
-                if self._has_winner(self._entry_patterns(entry), called_set):
-                    winners.append({
-                        'user_id': uid_str,
-                        'cartela_number': int(entry.get('cartela_number', 0)),
-                    })
-                    break
+            winning_numbers = sorted(
+                int(entry.get('cartela_number', 0))
+                for entry in cartelas
+                if self._has_winner(self._entry_patterns(entry), called_set)
+            )
+            if winning_numbers:
+                winners.append({'user_id': uid_str, 'cartela_number': winning_numbers[0]})
         return winners
 
     def _winner_sort_key(self, user_id: str, cartela_number: int, players: Dict[str, dict]) -> Tuple[str, int, str]:
@@ -365,7 +373,7 @@ class RoundEngine:
         return (str(joined_at), int(cartela_number), str(user_id))
 
     def choose_single_winner(self, winners: List[dict], players: Dict[str, dict]) -> Optional[dict]:
-        """Pick exactly one winner deterministically when multiple players hit on the same call."""
+        """Pick exactly one player deterministically when multiple players hit."""
         if not winners:
             return None
         return min(
@@ -376,6 +384,26 @@ class RoundEngine:
                 players,
             ),
         )
+
+    def choose_single_winning_cartela(self, round_id: str, user_id: int,
+                                      winning_cartelas: List[int], call_count: int) -> Optional[int]:
+        """Choose one winning card for a player who has multiple valid cards.
+
+        The choice is derived from the server-only draw secret and round state,
+        not from card number ordering or a client claim, so a second card can
+        never produce a second winning outcome while the choice remains fair.
+        """
+        candidates = sorted({int(number) for number in winning_cartelas})
+        if not candidates:
+            return None
+        import hashlib, hmac
+        secret = str(os.getenv('NUMBER_DRAW_SECRET') or os.getenv('JWT_SECRET') or 'local-development-draw-secret')
+        digest = hmac.new(
+            secret.encode('utf-8'),
+            f"winner-card:{round_id}:{int(user_id)}:{int(call_count)}".encode('utf-8'),
+            hashlib.sha256,
+        ).digest()
+        return candidates[int.from_bytes(digest[:8], 'big') % len(candidates)]
 
     def _candidate_progress(self, player_cartelas: Dict[str, List[dict]],
                              simulated_called: List[int]) -> int:
@@ -453,8 +481,11 @@ class RoundEngine:
         return await asyncio.to_thread(self._call_number_sync, round_id)
 
     def _call_number_sync(self, round_id: str) -> Optional[int]:
-        """Phase 1 (calls 1-15): random safe numbers, avoid any winner.
-        Phase 2 (calls 16+): target a winner and complete their pattern."""
+        """Choose the next number from a round-specific unbiased permutation.
+
+        The permutation is independent of players, cartelas, and winner claims,
+        so the engine never steers a real-money outcome toward a participant.
+        The expected-count transaction remains the final authority."""
         round_doc = self.rounds_ref.document(round_id).get()
         if not round_doc.exists:
             return None
@@ -469,85 +500,21 @@ class RoundEngine:
         if not available:
             return None
 
-        next_call_index = len(called) + 1
-        game_target = self.normalize_game_target(data.get('game_target'))
-        players = data.get('players', {})
-        player_cartelas = self.build_player_cartelas(players)
-
-        number = available[0]
-
-        # Ensure a predetermined winner is selected; the durable commit below
-        # persists it together with the first successful number call.
-        target_winner = data.get('target_winner')
-        if not target_winner:
-            target_winner = self._select_predetermined_winner(player_cartelas)
-
-        winning_pattern = set(target_winner.get('pattern', [])) if target_winner else set()
-
-        # ── Phase 1: safe, avoid winner, prefer winner's pattern numbers ──
-        if next_call_index < game_target:
-            random.shuffle(available)
-            chosen = None
-
-            # Prefer winner's pattern numbers, but leave at least 1 for Phase 2
-            if target_winner and len(winning_pattern - called_set) > 1:
-                for candidate in available:
-                    if candidate in winning_pattern:
-                        sim_set = called_set | {candidate}
-                        safe = True
-                        for uid_str, cartelas in player_cartelas.items():
-                            if not safe:
-                                break
-                            for entry in cartelas:
-                                if self._has_winner(self._entry_patterns(entry), sim_set):
-                                    safe = False
-                                    break
-                        if safe:
-                            chosen = candidate
-                            break
-
-            if chosen is None:
-                for candidate in available:
-                    sim_set = called_set | {candidate}
-                    safe = True
-                    for uid_str, cartelas in player_cartelas.items():
-                        if not safe:
-                            break
-                        for entry in cartelas:
-                            if self._has_winner(self._entry_patterns(entry), sim_set):
-                                safe = False
-                                break
-                    if safe:
-                        chosen = candidate
-                        break
-
-            number = chosen if chosen else available[0]
-
-        else:
-            # ── Phase 2: call winner's remaining numbers ──
-            picked = None
-            for n in (target_winner.get('pattern', []) if target_winner else []):
-                if n not in called_set:
-                    picked = n
-                    break
-
-            if picked is not None:
-                number = picked
-            else:
-                random.shuffle(available)
-                for candidate in available:
-                    sim_set = called_set | {candidate}
-                    safe = True
-                    for uid_str, cartelas in player_cartelas.items():
-                        if not safe:
-                            break
-                        for entry in cartelas:
-                            if self._has_winner(self._entry_patterns(entry), sim_set):
-                                safe = False
-                                break
-                    if safe:
-                        number = candidate
-                        break
+        round_secret = str(data.get('draw_secret') or '').strip()
+        if not round_secret:
+            # This is only a local-test fallback. Production rounds receive a
+            # secret from the gateway configuration when they are created.
+            round_secret = str(os.getenv('JWT_SECRET') or 'local-development-draw-secret')
+        import hashlib, hmac
+        seed = hmac.new(round_secret.encode('utf-8'), str(round_id).encode('utf-8'), hashlib.sha256).digest()
+        permutation = list(BINGO_NUMBERS)
+        for index in range(len(permutation) - 1, 0, -1):
+            digest = hmac.new(seed, str(index).encode('ascii'), hashlib.sha256).digest()
+            swap_index = int.from_bytes(digest[:8], 'big') % (index + 1)
+            permutation[index], permutation[swap_index] = permutation[swap_index], permutation[index]
+        number = next((candidate for candidate in permutation if candidate not in called_set), None)
+        if number is None:
+            return None
 
         from settlement import commit_round_number
         result = commit_round_number(
@@ -555,8 +522,7 @@ class RoundEngine:
             round_id,
             len(called),
             number,
-            game_target=game_target,
-            target_winner=target_winner,
+            game_target=data.get('game_target'),
         )
         return result.get('number')
 
@@ -609,7 +575,8 @@ class RoundEngine:
             if self.check_bingo_for_cartela(flat, called):
                 winning_cartelas.append(cartela_num)
 
-        return {'bingo': len(winning_cartelas) > 0, 'winning_cartelas': winning_cartelas}
+        canonical = self.choose_single_winning_cartela(round_id, user_id, winning_cartelas, len(called))
+        return {'bingo': canonical is not None, 'winning_cartelas': [canonical] if canonical is not None else []}
 
     def _winning_cartelas_for_player(self, players: Dict[str, dict], user_id: int,
                                       called_numbers: List[int]) -> List[int]:
@@ -689,6 +656,8 @@ class RoundEngine:
                     return {'ok': False, 'error': 'Invalid cartela number'}
                 if requested_cartela not in winning:
                     return {'ok': False, 'error': 'Cartela is not a valid winner'}
+                # A valid claim explicitly identifies the one canonical card;
+                # the atomic round write prevents any second card from paying.
                 canonical_cartela = requested_cartela
             elif winning:
                 canonical_cartela = winning[0]
@@ -750,12 +719,21 @@ class RoundEngine:
         data = round_doc.to_dict()
         if data.get('status') == 'completed':
             winners = [str(w) for w in (data.get('winners') or [])]
+            same_player = bool(winners and winners[0] == str(user_id))
+            stored_cartela = data.get('winning_cartela')
+            requested_cartela = None
+            if winning_cartela is not None:
+                try:
+                    requested_cartela = int(winning_cartela)
+                except (TypeError, ValueError):
+                    requested_cartela = -1
+            same_cartela = requested_cartela is None or requested_cartela == stored_cartela
             return {
-                'ok': bool(winners and winners[0] == str(user_id)),
-                'winner': bool(winners and winners[0] == str(user_id)),
+                'ok': same_player and same_cartela,
+                'winner': same_player and same_cartela,
                 'winner_ids': [int(winners[0])] if len(winners) == 1 else [],
-                'winning_cartela': data.get('winning_cartela'),
-                'error': None if winners and winners[0] == str(user_id) else 'Another player already won',
+                'winning_cartela': stored_cartela,
+                'error': None if same_player and same_cartela else ('This round was won with another cartela' if same_player else 'Another player already won'),
             }
         current_winners = self._winning_cartelas_for_player(
             data.get('players', {}) or {}, user_id, data.get('called_numbers', [])
