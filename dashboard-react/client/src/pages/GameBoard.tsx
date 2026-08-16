@@ -181,18 +181,6 @@ export default function GameBoard() {
     if (winnerAnnouncement && returnCountdown === 0) navigate(selectionPath, { replace: true });
   }, [navigate, returnCountdown, selectionPath, winnerAnnouncement]);
 
-  useEffect(() => {
-    if (!round || round.status !== "playing" || !playerId || claiming) return;
-    for (const card of cartelas) {
-      if (!checkBingoLocal(flattenCartela(card), calledNumbers)) continue;
-      const attemptKey = `${roundId}:${card.number}:${calledNumbers.length}`;
-      if (claimAttempts.current.has(attemptKey)) continue;
-      claimAttempts.current.add(attemptKey);
-      void claim(card.number, attemptKey);
-      break;
-    }
-  }, [calledNumbers, cartelas, claiming, playerId, round?.status, roundId]);
-
   async function claim(number: number, attemptKey?: string) {
     if (claiming || !roundId || !player?.user_id) return;
     setClaiming(true);

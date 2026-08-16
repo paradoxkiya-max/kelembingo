@@ -971,13 +971,33 @@ async def _game_loop(round_id: str):
             completion_reason = None
 
             if winner_entries:
-                chosen_winner = await asyncio.to_thread(
-                    engine.choose_single_winner,
-                    winner_entries,
-                    players,
-                    round_id,
-                    len(called_now),
+                # In the original targeted model, the first durable target is
+                # authoritative when it has naturally completed. This prevents
+                # a simultaneous valid hit or a stale worker from replacing the
+                # selected target cartela. Legacy rounds without a target still
+                # use the existing HMAC tie-break path.
+                target = rd_after.get('target_winner') or {}
+                target_user = str(target.get('user_id', ''))
+                try:
+                    target_cartela = int(target.get('cartela_number', 0))
+                except (TypeError, ValueError):
+                    target_cartela = 0
+                chosen_winner = next(
+                    (
+                        entry for entry in winner_entries
+                        if str(entry.get('user_id', '')) == target_user
+                        and int(entry.get('cartela_number', 0)) == target_cartela
+                    ),
+                    None,
                 )
+                if chosen_winner is None:
+                    chosen_winner = await asyncio.to_thread(
+                        engine.choose_single_winner,
+                        winner_entries,
+                        players,
+                        round_id,
+                        len(called_now),
+                    )
                 completion_reason = 'smart_single_winner' if len(winner_entries) == 1 else 'smart_tie_break_single_winner'
             elif len(called_now) >= MAX_SMART_CALLS:
                 completion_reason = 'no_winner_all_numbers'

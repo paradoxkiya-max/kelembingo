@@ -26,3 +26,7 @@
 - [x] Harden the original phase-one/phase-two engine to select one server-random winner and a random target call from 15–30
 - [x] Guarantee no early winner, exactly one terminal winner, strict five-second calls, and retry-safe settlement
 - [x] Add statistical and lifecycle regression coverage for the hardened original model
+- [x] Audit UI effects, realtime subscriptions, polling, and navigation side effects that can delay or duplicate round state
+- [x] Audit gateway loops, database writers, transactions, and settlement side effects for round-plan drift
+- [x] Add targeted fixes only for verified lag, duplicate-writer, stale-snapshot, or navigation-race causes
+- [x] Validate the audit findings with lag, realtime, lifecycle, frontend, and database regressions
