@@ -6,6 +6,7 @@ and prize distribution.
 """
 
 import random
+import secrets
 import os
 import asyncio
 import logging
@@ -38,6 +39,7 @@ GAME_LENGTH_RANGE = (15, 30)    # random target: each round ends between 15-30 n
 
 _CARTELA_CACHE = {}   # Global cache: cartela_number -> flat cartela list
 _PATTERN_CACHE = {}    # Global cache: tuple(flat_cartela) -> list of patterns
+_SECURE_RANDOM = secrets.SystemRandom()  # server-side unpredictable choices
 
 
 def _parse_dt(value):
@@ -297,11 +299,11 @@ class RoundEngine:
         pattern (typically 0-2)."""
         min_calls, max_calls = GAME_LENGTH_RANGE
         if game_target is None:
-            return random.randint(min_calls, max_calls)
+            return _SECURE_RANDOM.randint(min_calls, max_calls)
         try:
             target = int(game_target)
         except (TypeError, ValueError):
-            return random.randint(min_calls, max_calls)
+            return _SECURE_RANDOM.randint(min_calls, max_calls)
         return max(min_calls, min(max_calls, target))
 
     def build_player_cartelas(self, players: Dict[str, dict]) -> Dict[str, List[dict]]:
@@ -459,11 +461,11 @@ class RoundEngine:
         if not player_cartelas:
             return None
         user_ids = list(player_cartelas.keys())
-        winner_uid = random.choice(user_ids)
+        winner_uid = _SECURE_RANDOM.choice(user_ids)
         entries = player_cartelas[winner_uid]
-        entry = random.choice(entries)
+        entry = _SECURE_RANDOM.choice(entries)
         patterns = self._entry_patterns(entry)
-        pattern = random.choice(patterns)
+        pattern = _SECURE_RANDOM.choice(patterns)
         return {
             'user_id': winner_uid,
             'cartela_number': entry['cartela_number'],
@@ -492,7 +494,7 @@ class RoundEngine:
             return None
         min_missing = min(c['missing'] for c in candidates)
         tier = [c for c in candidates if c['missing'] == min_missing]
-        return random.choice(tier)
+        return _SECURE_RANDOM.choice(tier)
 
     async def _db(self, call):
         """Run a sync DB call in a thread to avoid blocking the event loop."""
@@ -507,40 +509,86 @@ class RoundEngine:
         return await asyncio.to_thread(self._call_number_sync, round_id)
 
     def _call_number_sync(self, round_id: str) -> Optional[int]:
-        """Choose the next number from a round-specific unbiased permutation.
+        """Call a random safe number, then complete one random target card.
 
-        The permutation is independent of players, cartelas, and winner claims,
-        so the engine never steers a real-money outcome toward a participant.
-        The expected-count transaction remains the final authority."""
+        Phase 1 runs before the durable round target and never permits any
+        cartela to complete. Phase 2 calls the selected cartela's remaining
+        pattern numbers, so one winner is reached at the stored random target
+        between 15 and 30 calls. The expected-count transaction remains the
+        final authority when more than one gateway process is active.
+        """
         round_doc = self.rounds_ref.document(round_id).get()
         if not round_doc.exists:
             return None
-
         data = round_doc.to_dict()
         if data['status'] != 'playing':
             return None
-
         called = list(data.get('called_numbers', []))
         called_set = set(called)
         available = [n for n in BINGO_NUMBERS if n not in called_set]
         if not available:
             return None
 
-        round_secret = str(data.get('draw_secret') or '').strip()
-        if not round_secret:
-            # This is only a local-test fallback. Production rounds receive a
-            # secret from the gateway configuration when they are created.
-            round_secret = str(os.getenv('JWT_SECRET') or 'local-development-draw-secret')
-        import hashlib, hmac
-        seed = hmac.new(round_secret.encode('utf-8'), str(round_id).encode('utf-8'), hashlib.sha256).digest()
-        permutation = list(BINGO_NUMBERS)
-        for index in range(len(permutation) - 1, 0, -1):
-            digest = hmac.new(seed, str(index).encode('ascii'), hashlib.sha256).digest()
-            swap_index = int.from_bytes(digest[:8], 'big') % (index + 1)
-            permutation[index], permutation[swap_index] = permutation[swap_index], permutation[index]
-        number = next((candidate for candidate in permutation if candidate not in called_set), None)
-        if number is None:
-            return None
+        next_call_index = len(called) + 1
+        game_target = self.normalize_game_target(data.get('game_target'))
+        players = data.get('players', {})
+        player_cartelas = self.build_player_cartelas(players)
+        number = available[0]
+        target_winner = data.get('target_winner')
+        if not target_winner:
+            target_winner = self._select_predetermined_winner(player_cartelas)
+        winning_pattern = set(target_winner.get('pattern', [])) if target_winner else set()
+
+        # Phase 1: choose a random safe number before the target call. Prefer
+        # the selected pattern when it remains safe, but leave one pattern
+        # number for Phase 2 so no cartela can win early.
+        if next_call_index < game_target:
+            _SECURE_RANDOM.shuffle(available)
+            chosen = None
+            if target_winner and len(winning_pattern - called_set) > 1:
+                for candidate in available:
+                    if candidate not in winning_pattern:
+                        continue
+                    simulated = called_set | {candidate}
+                    if any(
+                        self._has_winner(self._entry_patterns(entry), simulated)
+                        for cartelas in player_cartelas.values()
+                        for entry in cartelas
+                    ):
+                        continue
+                    chosen = candidate
+                    break
+            if chosen is None:
+                for candidate in available:
+                    simulated = called_set | {candidate}
+                    if any(
+                        self._has_winner(self._entry_patterns(entry), simulated)
+                        for cartelas in player_cartelas.values()
+                        for entry in cartelas
+                    ):
+                        continue
+                    chosen = candidate
+                    break
+            number = chosen if chosen is not None else available[0]
+        else:
+            # Phase 2: call the selected winner's remaining pattern numbers.
+            picked = next(
+                (n for n in (target_winner or {}).get('pattern', []) if n not in called_set),
+                None,
+            )
+            if picked is not None:
+                number = picked
+            else:
+                _SECURE_RANDOM.shuffle(available)
+                for candidate in available:
+                    simulated = called_set | {candidate}
+                    if not any(
+                        self._has_winner(self._entry_patterns(entry), simulated)
+                        for cartelas in player_cartelas.values()
+                        for entry in cartelas
+                    ):
+                        number = candidate
+                        break
 
         from settlement import commit_round_number
         result = commit_round_number(
@@ -548,7 +596,8 @@ class RoundEngine:
             round_id,
             len(called),
             number,
-            game_target=data.get('game_target'),
+            game_target=game_target,
+            target_winner=target_winner,
         )
         return result.get('number')
 

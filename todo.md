@@ -17,3 +17,16 @@
 - [x] Record the clarified requirement: fair random draws must determine the winner naturally; the engine must not preselect a user or cartela
 - [x] Investigate why the deployed UI displays `CALLED 45` and remains in spectator mode when the intended maximum is 30 calls
 - [x] Ensure the round reaches one authoritative terminal winner or no-winner resolution by the configured call limit
+- [ ] Run test_bingo.py and focused round-engine regressions for PR #48
+- [ ] Merge PR #48 only after local tests and GitHub CI pass
+- [x] Verify React frontend compatibility with the restored historical 15–30-call Bingo engine
+- [x] Validate frontend called-number rendering, spectator routing, winner announcement, and terminal navigation
+- [ ] Audit settlement.py against the user’s main-branch history and identify changed payout, refund, and wallet logic
+- [ ] Restore verified historical settlement behavior and validate all money-flow regressions
+- [x] Harden the original phase-one/phase-two engine to select one server-random winner and a random target call from 15–30
+- [x] Guarantee no early winner, exactly one terminal winner, strict five-second calls, and retry-safe settlement
+- [x] Add statistical and lifecycle regression coverage for the hardened original model
+- [x] Audit UI effects, realtime subscriptions, polling, and navigation side effects that can delay or duplicate round state
+- [x] Audit gateway loops, database writers, transactions, and settlement side effects for round-plan drift
+- [x] Add targeted fixes only for verified lag, duplicate-writer, stale-snapshot, or navigation-race causes
+- [x] Validate the audit findings with lag, realtime, lifecycle, frontend, and database regressions

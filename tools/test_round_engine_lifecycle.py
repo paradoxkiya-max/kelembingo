@@ -69,7 +69,8 @@ with tempfile.TemporaryDirectory() as tmp:
     assert len(set(calls)) == 16, calls
     round_calls_data = db.collection("rounds").document("round-calls").get().to_dict()
     assert len(round_calls_data["called_numbers"]) == 16
-    assert "target_winner" not in round_calls_data
+    assert isinstance(round_calls_data.get("target_winner"), dict), round_calls_data
+    assert 15 <= int(round_calls_data.get("game_target", 0)) <= 30, round_calls_data
     assert "draw_secret" not in round_calls_data
 
     db.collection("cartelas_master").document("2").set({
@@ -136,11 +137,12 @@ with tempfile.TemporaryDirectory() as tmp:
     assert refunded_user["losses"] == 3, refunded_user
 
 round_source = (ROOT / "game" / "round_engine.py").read_text()
-assert "round-specific unbiased permutation" in round_source
-assert "hmac.new" in round_source
-assert "target_winner" not in round_source.split("def _call_number_sync", 1)[1].split("def get_cartela_patterns", 1)[0]
+assert "Phase 1" in round_source
+assert "Phase 2" in round_source
+assert "_SECURE_RANDOM" in round_source
+assert "target_winner" in round_source.split("def _call_number_sync", 1)[1].split("def get_cartela_patterns", 1)[0]
 assert "MAX_SMART_CALLS = GAME_LENGTH_RANGE[1]" in (ROOT / "api" / "admin_api.py").read_text()
-assert "winner:{round_id}:{int(call_count or 0)}" in round_source
+assert "target_winner=target_winner" in round_source
 
 # A simultaneous hit must not always go to the earliest joiner when the
 # authoritative round context is available.
