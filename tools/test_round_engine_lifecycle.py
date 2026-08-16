@@ -139,7 +139,7 @@ round_source = (ROOT / "game" / "round_engine.py").read_text()
 assert "round-specific unbiased permutation" in round_source
 assert "hmac.new" in round_source
 assert "target_winner" not in round_source.split("def _call_number_sync", 1)[1].split("def get_cartela_patterns", 1)[0]
-assert "MAX_SMART_CALLS = len(BINGO_NUMBERS)" in (ROOT / "api" / "admin_api.py").read_text()
+assert "MAX_SMART_CALLS = GAME_LENGTH_RANGE[1]" in (ROOT / "api" / "admin_api.py").read_text()
 assert "winner:{round_id}:{int(call_count or 0)}" in round_source
 
 # A simultaneous hit must not always go to the earliest joiner when the
