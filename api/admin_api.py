@@ -1545,16 +1545,20 @@ async def get_round(round_id: str):
 
 
 @app.get("/api/rounds")
-async def get_rounds(limit: int = 20, status: Optional[str] = None, winners_only: bool = False):
+async def get_rounds(limit: int = 20, status: Optional[str] = None, winners_only: bool = False, request: Request = None):
     """Get recent rounds, with optional player-facing status/winner filters.
 
-    The admin console keeps the unfiltered operational list. Player History
-    can request completed rounds containing winners without changing the
-    admin history semantics.
+    The admin console keeps the unfiltered operational list. An authenticated
+    player receives only rounds in which that player participated; unauthenticated
+    and admin callers retain the existing operational list semantics.
     """
     requested_limit = max(1, min(int(limit), 500))
     fetch_limit = requested_limit if not (status or winners_only) else min(500, max(requested_limit * 5, 50))
     rounds = await engine.get_recent_rounds(fetch_limit)
+    player_identity = _player_ok(request) if request is not None else None
+    if player_identity:
+        player_id = str(player_identity.get("user_id"))
+        rounds = [round_data for round_data in rounds if player_id in (round_data.get("players", {}) or {})]
     if status:
         rounds = [round_data for round_data in rounds if str(round_data.get("status", "")).lower() == status.lower()]
     if winners_only:

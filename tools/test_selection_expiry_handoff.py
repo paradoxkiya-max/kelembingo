@@ -25,8 +25,9 @@ assert "primeRoundSnapshot" in select and "primeRoundSnapshot" in realtime
 assert "const serverRound = await playerApi.round" not in select
 assert "cartelaCache" in client
 assert '"SYNCING…"' not in select and '"GO"' in select
+assert "observeRealtimeReconnect" in select and "No active round is available yet. Please try again." in select
 assert "committedWallet" in select and "setCommittedWallet(balance)" in select
-assert "playerCartelas" in select
+assert "authoritativeSelectedRef" in select and "applyPoolSnapshot" in select
 assert "cartelas.length === 0" in game
 assert 'Spectating mode' in game
 assert 'This round started without your cartelas' not in select

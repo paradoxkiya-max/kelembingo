@@ -119,6 +119,7 @@ assert "broadcast_player_payment" in admin_source and '"user_id": str(user_id)' 
 assert "observePlayer" in player_context and "playerApi.reconcile" in player_context
 assert "observeAdminCollections" in admin_context and "realtimeRevision" in admin_context
 assert "observePlayerPayments" in wallet_source and "cacheAt.current = 0" in wallet_source
-assert "claimBingo" in game_source
+assert "claimBingo" not in game_source
+assert "complete_round" in admin_source and "winner_entries" in admin_source
 
 print("realtime and single-winner hardening regression check: PASS")

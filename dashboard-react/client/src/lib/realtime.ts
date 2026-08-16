@@ -16,12 +16,20 @@ class RoomManager {
   private socket: Socket | null = null;
   private rooms = new Map<string, { data: Subscription; refs: number; listeners: Set<(message: SnapshotMessage) => void> }>();
   private ready = false;
+  private connectedOnce = false;
+  private reconnectListeners = new Set<() => void>();
 
   private connect() {
     if (this.socket) return this.socket;
     try {
       this.socket = io(GATEWAY_URL, { transports: ["websocket", "polling"], reconnection: true, reconnectionDelay: 1000, reconnectionAttempts: Infinity });
-      this.socket.on("connect", () => { this.ready = true; Array.from(this.rooms.values()).forEach((room) => this.socket?.emit("subscribe", room.data)); });
+      this.socket.on("connect", () => {
+        const reconnecting = this.connectedOnce;
+        this.connectedOnce = true;
+        this.ready = true;
+        Array.from(this.rooms.values()).forEach((room) => this.socket?.emit("subscribe", room.data));
+        if (reconnecting) Array.from(this.reconnectListeners).forEach((listener) => listener());
+      });
       this.socket.on("disconnect", () => { this.ready = false; });
       this.socket.on("snapshot", (message: SnapshotMessage) => this.dispatch("snapshot", message));
       this.socket.on("query_snapshot", (message: SnapshotMessage) => this.dispatch("query_snapshot", message));
@@ -63,6 +71,11 @@ class RoomManager {
     return this.subscribeDocument("rounds", roundId, listener);
   }
 
+  subscribeReconnect(listener: () => void) {
+    this.reconnectListeners.add(listener);
+    return () => this.reconnectListeners.delete(listener);
+  }
+
   subscribeCollection(collection: string, listener: (message: SnapshotMessage) => void) {
     const data: Subscription = { collection };
     const adminToken = window.localStorage.getItem("kelembingo.adminToken"); if (adminToken) data.admin_token = adminToken;
@@ -101,6 +114,10 @@ export function observeCartelaPool(roundId: string, listener: (message: Snapshot
   return roomManager.subscribeRound(roundId, (message) => {
     if (message.type === "cartela_pool" || message.round_id === roundId) listener(message);
   });
+}
+
+export function observeRealtimeReconnect(listener: () => void) {
+  return roomManager.subscribeReconnect(listener);
 }
 
 export function observePlayer(userId: string, listener: (player: Player | null) => void) {

@@ -38,13 +38,11 @@ export default function GameBoard() {
   const [countdown, setCountdown] = useState(0);
   const [timer, setTimer] = useState(0);
   const [serverClockOffset, setServerClockOffset] = useState(0);
-  const [claiming, setClaiming] = useState(false);
-  const [claimError, setClaimError] = useState("");
+
   const [winnerAnnouncement, setWinnerAnnouncement] = useState<(WinnerAnnouncementData & { key: string }) | null>(null);
   const [winnerCartela, setWinnerCartela] = useState<Cartela | null>(null);
   const [returnCountdown, setReturnCountdown] = useState(10);
   const previousCalled = useRef<number[] | null>(null);
-  const claimAttempts = useRef(new Set<string>());
   const callAudio = useRef<HTMLAudioElement | null>(null);
   const cartelaAudio = useRef<HTMLAudioElement | null>(null);
   const audioWarmupDone = useRef(false);
@@ -66,6 +64,12 @@ export default function GameBoard() {
         const nextDeadline = next.next_number_at ? new Date(next.next_number_at).getTime() : 0;
         if (previousDeadline > 0 && nextDeadline > 0 && nextDeadline < previousDeadline) return previous;
       }
+
+      // A completed snapshot without winner fields can be an older fanout
+      // payload. Preserve a winner already known by the client so the result
+      // dialog cannot be skipped by an out-of-order event.
+      if (previous.status === "completed" && previous.winners?.length && next.status === "completed" && !next.winners?.length) return previous;
+      if (previous.status === "completed" && previous.winning_cartela && next.status === "completed" && !next.winning_cartela) return previous;
 
       return next;
     });
@@ -152,7 +156,7 @@ export default function GameBoard() {
   // out-of-order snapshot after a reconnect, background-tab pause, or proxy
   // delay. This keeps the display aligned with the authoritative round clock.
   useEffect(() => {
-    if (!roundId || round?.status !== "playing") return;
+    if (!roundId || (round?.status !== "playing" && round?.status !== "completed")) return;
     let active = true;
     const refreshRound = () => {
       void playerApi.round(roundId)
@@ -206,19 +210,6 @@ export default function GameBoard() {
     if (winnerAnnouncement && returnCountdown === 0) navigate(selectionPath, { replace: true });
   }, [navigate, returnCountdown, selectionPath, winnerAnnouncement]);
 
-  async function claim(number: number, attemptKey?: string) {
-    if (claiming || !roundId || !player?.user_id) return;
-    setClaiming(true);
-    try {
-      const response = await playerApi.claimBingo(roundId, player.user_id, number);
-      if (!response.winner && !response.already_completed && attemptKey) claimAttempts.current.delete(attemptKey);
-      if (!response.winner && !response.already_completed) setClaimError("The server did not validate this cartela.");
-    } catch (error) {
-      if (attemptKey) claimAttempts.current.delete(attemptKey);
-      setClaimError(error instanceof Error ? error.message : "Claim failed");
-    } finally { setClaiming(false); }
-  }
-
   function mark(cardNumber: number, number: number) {
     if (!called.has(number)) return;
     setMarked((old) => ({ ...old, [cardNumber]: new Set([...Array.from(old[cardNumber] || []), number]) }));
@@ -240,7 +231,6 @@ export default function GameBoard() {
       <section className="order-2 flex w-[55%] flex-col rounded-2xl border border-white/[0.06] bg-[#1A1A2E]/70 p-2 backdrop-blur-md"><div className="flex items-center justify-center gap-2 py-1"><button onClick={() => setVoice((value) => !value)} aria-label="Toggle voice" className={`audio-btn flex h-8 w-8 shrink-0 items-center justify-center rounded-full border ${voice ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-300" : "border-white/10 bg-white/[0.08] text-white/45"}`}>{voice ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}</button><div className="number-circle-outer flex h-14 w-14 items-center justify-center rounded-full bg-[conic-gradient(from_0deg,#FFD700,#FF8C00,#FFD700,#FF8C00,#FFD700)] p-[3px]">{current ? <div className="flex h-full w-full flex-col items-center justify-center rounded-full border-2 border-yellow-300/30 bg-[radial-gradient(circle,#1A1A2E_60%,#0D1117_100%)]"><span className="text-[10px] font-black" style={{ color: colors[Math.floor((current - 1) / 15)] }}>{letters[Math.floor((current - 1) / 15)]}</span><span className="text-lg font-black">{current}</span></div> : <div className="flex h-full w-full items-center justify-center rounded-full bg-[#1A1A2E] text-[9px] text-white/30">Waiting</div>}</div><button onClick={() => setMusic((value) => !value)} aria-label="Toggle music" className={`audio-btn flex h-8 w-8 shrink-0 items-center justify-center rounded-full border ${music ? "border-orange-400/30 bg-orange-500/10 text-orange-300" : "border-white/10 bg-white/[0.08] text-white/45"}`}><Music className="h-4 w-4" /></button></div><div className="my-1 h-px bg-white/[0.06]" /><div className="flex min-h-[22px] gap-1 overflow-x-auto py-1 [scrollbar-width:none]">{calledNumbers.slice(-12).map((number) => <span key={number} className={`called-tag flex min-w-[36px] flex-col items-center rounded-lg border px-2 py-[3px] ${tagClass(number)}`}><span className="text-[8px] font-bold leading-none" style={{ color: colors[Math.floor((number - 1) / 15)] }}>{letters[Math.floor((number - 1) / 15)]}</span><span className="text-[11px] font-black leading-tight text-white">{number}</span></span>)}</div><div className="my-1 h-px bg-white/[0.06]" /><div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto">{cardsLoading ? <div className="flex flex-1 flex-col items-center justify-center text-center text-white/40"><Loader2 className="mb-2 h-5 w-5 animate-spin text-[#FF8C00]" /><p className="text-xs">Loading your cartelas…</p></div> : cartelas.length ? cartelas.map((card) => <CartelaCard key={card.number} card={card} marked={marked[card.number] || EMPTY_MARKED} called={called} onMark={(number) => mark(card.number, number)} />) : <div className="flex flex-1 flex-col items-center justify-center px-2 py-4 text-center"><Eye className="mb-2 h-7 w-7 text-[#FF8C00]" /><p className="mb-1 text-sm font-bold text-[#FFB45C]">Spectating mode</p><p className="text-xs leading-5 text-white/45">You are watching this round. Join the next selecting round to play with a cartela.</p>{cardError && <p className="mt-2 text-[10px] text-red-300">{cardError}</p>}</div>}</div></section>
     </div>
     <div className="section-separator mx-2 h-px bg-white/[0.08]" /><div className="mt-auto px-2 py-2"><div className="flex items-center justify-between gap-2 rounded-2xl border border-white/[0.08] bg-[#1A1A2E]/80 px-3 py-2 backdrop-blur-xl"><button onClick={() => navigate("/", { replace: true })} className="flex items-center gap-1.5 rounded-xl border border-red-500/25 bg-red-500/15 px-3 py-2 text-[11px] font-semibold text-red-400 transition-transform active:scale-95"><X className="h-3.5 w-3.5" /> Leave</button><label className={`flex items-center gap-2 rounded-xl border px-3 py-2 ${autoMark ? "border-emerald-400/30 bg-emerald-500/10" : "border-white/10 bg-white/[0.04]"}`}><span className={`text-[10px] font-black uppercase tracking-wider ${autoMark ? "text-emerald-300" : "text-white/45"}`}>Auto mark</span><Switch checked={autoMark} onCheckedChange={setAutoMark} aria-label="Toggle automatic number marking" className="h-5 w-9 border-white/10 data-[state=checked]:bg-emerald-500 data-[state=unchecked]:bg-white/15 [&_[data-slot=switch-thumb]]:size-4" /></label></div></div>
-    {claimError && <ResultModal result={{ winner: false, message: claimError }} onClose={() => setClaimError("")} />}
     {winnerAnnouncement && <WinnerAnnouncement winner={winnerAnnouncement} cartela={winnerCartela} called={called} countdown={returnCountdown} onReturn={() => navigate(selectionPath, { replace: true })} />}
   </div>;
 }
@@ -251,7 +241,5 @@ function flattenCartela(card?: Cartela) { const source: unknown = card?.cartela 
 function playNumberAudio(number: number, audioRef: { current: HTMLAudioElement | null }) { const letter = letters[Math.floor((number - 1) / 15)]; const audio = new Audio(`/audio/${letter}${number}.mp3`); audio.preload = "auto"; audioRef.current?.pause(); audioRef.current = audio; void audio.play().catch(() => undefined); }
 function warmNumberAudio() { ["B1", "I16", "N31", "G46", "O61"].forEach((call) => { const audio = new Audio(`/audio/${call}.mp3`); audio.preload = "auto"; audio.load(); }); }
 function playCartelaAudio(number: number, audioRef: { current: HTMLAudioElement | null }) { const audio = new Audio(`/audio/cartela_bingo/cartela_${number}.mp3`); audio.preload = "auto"; audioRef.current?.pause(); audioRef.current = audio; void audio.play().catch(() => undefined); }
-function checkBingoLocal(flat: number[], called: number[]) { const calledSet = new Set(called); const grid = Array.from({ length: 5 }, (_, row) => flat.slice(row * 5, row * 5 + 5)); const marked = (number: number) => number === 0 || calledSet.has(number); for (let row = 0; row < 5; row += 1) if (grid[row].every(marked)) return true; for (let column = 0; column < 5; column += 1) if (grid.every((row) => marked(row[column]))) return true; if ([0, 1, 2, 3, 4].every((index) => marked(grid[index][index]))) return true; if ([0, 1, 2, 3, 4].every((index) => marked(grid[index][4 - index]))) return true; return [[0, 0], [0, 4], [4, 0], [4, 4]].every(([row, column]) => { const number = grid[row][column]; return number !== 0 && calledSet.has(number); }); }
 function toneClass(tone: string) { return tone === "orange" ? "border-[#FF8C00]/30 bg-[#FF8C00]/10 text-[#FF8C00]" : tone === "green" ? "border-[#10B981]/30 bg-[#10B981]/10 text-[#34D399]" : tone === "blue" ? "border-[#3B82F6]/30 bg-[#3B82F6]/10 text-[#60A5FA]" : tone === "purple" ? "border-[#A855F7]/30 bg-[#A855F7]/10 text-[#C084FC]" : tone === "teal" ? "border-[#14B8A6]/30 bg-[#14B8A6]/10 text-[#2DD4BF]" : "border-red-400/30 bg-red-500/10 text-red-300"; }
 function tagClass(number: number) { return ["border-blue-400/40 bg-blue-500/20", "border-violet-400/40 bg-violet-500/20", "border-fuchsia-400/40 bg-fuchsia-500/20", "border-emerald-400/40 bg-emerald-500/20", "border-orange-400/40 bg-orange-500/20"][Math.floor((number - 1) / 15)] || "border-white/10 bg-white/5"; }
-function ResultModal({ result, onClose }: { result: { winner: boolean; payout?: number; message?: string }; onClose: () => void }) { return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label={result.winner ? "Bingo verified" : "Claim result"}><div className="w-full max-w-[360px] rounded-3xl border border-white/10 bg-[#1A1A2E] p-6 text-center shadow-2xl"><div className={`mx-auto flex h-16 w-16 items-center justify-center rounded-full ${result.winner ? "bg-[#10B981]/20 text-[#34D399]" : "bg-red-500/15 text-red-300"}`}>{result.winner ? <Check className="h-8 w-8" /> : <X className="h-8 w-8" />}</div><h2 className="mt-4 text-xl font-black">{result.winner ? "Bingo verified" : "Claim not verified"}</h2>{result.winner ? <p className="mt-2 text-sm text-white/45">PRIZE PER WINNER</p> : null}<p className={`mt-1 text-2xl font-black ${result.winner ? "text-[#FFB45C]" : "text-red-300"}`}>{result.winner ? etb(result.payout) : result.message}</p><button onClick={onClose} className="mt-5 w-full rounded-xl bg-[#FF8C00] py-3 text-xs font-black text-white">Close</button></div></div>; }
