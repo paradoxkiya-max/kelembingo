@@ -145,9 +145,9 @@ socket_app = CORSASGIMiddleware(_raw_socket_app, ALLOWED_ORIGINS, ALLOWED_ORIGIN
 
 engine = RoundEngine(db)
 user_manager = UserManager(db)
-# An unbiased draw must be allowed to reach any valid Bingo pattern. Ending at
-# 30 calls caused valid rounds to refund before a winner could appear.
-MAX_SMART_CALLS = len(BINGO_NUMBERS)
+# Preserve the main-branch round rule: the game target range is 15–30,
+# and the active loop uses its maximum as the terminal call limit.
+MAX_SMART_CALLS = GAME_LENGTH_RANGE[1]
 
 # ─── Auth (C1) ───
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "paradox")
@@ -918,7 +918,7 @@ async def _game_loop(round_id: str):
                 ))
                 if result.get('ok'):
                     logger.info(
-                        f"[GameLoop] {round_id}: all 75 numbers called with no winner — "
+                        f"[GameLoop] {round_id}: maximum {MAX_SMART_CALLS} calls reached with no winner — "
                         f"refunded {result.get('amount', 0)} ETB"
                     )
                 else:

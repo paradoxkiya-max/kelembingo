@@ -15,3 +15,5 @@
 - [x] Delete the react-rebuild branch after merge
 - [ ] Verify Render gateway health and frontend build timestamp (frontend reachable; gateway endpoint timed out from browser and sandbox probes)
 - [x] Record the clarified requirement: fair random draws must determine the winner naturally; the engine must not preselect a user or cartela
+- [x] Investigate why the deployed UI displays `CALLED 45` and remains in spectator mode when the intended maximum is 30 calls
+- [x] Ensure the round reaches one authoritative terminal winner or no-winner resolution by the configured call limit
