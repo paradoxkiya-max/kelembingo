@@ -33,7 +33,10 @@ assert "committedWallet" in select and "setCommittedWallet(balance)" in select
 assert "authoritativeSelectedRef" in select and "applyPoolSnapshot" in select
 assert "const pendingSelection = selectedRef.current" in select
 assert "STARTING…" in select
-assert "const interval = window.setInterval(refreshHandoff, 500)" in select
+assert "const retryTimers = [1000, 2500, 5000]" in select
+assert "avoid issuing 30 requests per player" in select
+assert "active_stakes = set()" not in gateway
+assert 'REALTIME_EVENT_POLL_SECONDS", "0.5"' in gateway
 assert "cartelas.length === 0" in game
 assert 'Spectating mode' in game
 assert 'This round started without your cartelas' not in select

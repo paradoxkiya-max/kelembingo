@@ -793,7 +793,11 @@ async def _game_loop(round_id: str):
             status = data.get('status')
 
             if status == 'completed':
-                await _provision_next_round(int(data.get('stake', DEFAULT_STAKE) or DEFAULT_STAKE))
+                # Empty rounds must not create an endless chain of idle rounds.
+                # Real player rounds are provisioned again by their settlement
+                # paths; abandoned rounds simply terminate here.
+                if int(data.get('player_count', 0) or 0) > 0:
+                    await _provision_next_round(int(data.get('stake', DEFAULT_STAKE) or DEFAULT_STAKE))
                 return
             if status is None:
                 return
@@ -1148,18 +1152,10 @@ async def start_background_monitor():
                             logger.info(f"[Monitor] Resuming orphaned playing round {rid}")
                             _start_game_loop(rid)
 
-                    # ── Continuous Loop Enforcement ──
-                    # Ensure every stake has an active round (selecting or playing).
-                    active_stakes = set()
-                    for doc in selecting_docs + playing_docs:
-                        rd = doc.to_dict()
-                        s = rd.get('stake', DEFAULT_STAKE)
-                        active_stakes.add(s)
-                    for stake_val in VALID_STAKES:
-                        if stake_val not in active_stakes:
-                            result = await engine.create_round(stake=stake_val)
-                            if 'id' in result:
-                                _start_game_loop(result['id'])
+                    # Rounds are provisioned on demand by create_round(stake),
+                    # or immediately after a real player round completes. Do not
+                    # create idle rounds for every stake on every monitor cycle;
+                    # that wastes database writes and usage on an empty lobby.
 
                 except Exception as e:
                     logger.warning(f"Error in background monitor: {e}")
@@ -2975,7 +2971,7 @@ def _latest_event_cursor():
 async def _event_broadcast_loop():
     """Bridge writes without direct route broadcasts using an indexed cursor."""
     last_created_at, last_event_id = await asyncio.to_thread(_latest_event_cursor)
-    poll_interval = max(0.05, float(os.getenv("REALTIME_EVENT_POLL_SECONDS", "0.15")))
+    poll_interval = max(0.25, float(os.getenv("REALTIME_EVENT_POLL_SECONDS", "0.5")))
     while True:
         try:
             events = await asyncio.to_thread(

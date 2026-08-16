@@ -264,9 +264,7 @@ export default function CartelaSelect() {
   useEffect(() => {
     if (!expired || !round?.id || round.status !== "selecting") return;
     let active = true;
-    let attempts = 0;
     const refreshHandoff = () => {
-      attempts += 1;
       void playerApi.round(String(round.id)).then(({ round: latest }) => {
         if (!active) return;
         if (latest.status === "playing") {
@@ -277,11 +275,13 @@ export default function CartelaSelect() {
           navigate("/", { replace: true });
         }
       }).catch(() => undefined);
-      if (attempts >= 30) window.clearInterval(interval);
     };
-    const interval = window.setInterval(refreshHandoff, 500);
+    // Realtime round snapshots normally perform the handoff immediately. These
+    // sparse retries are only a recovery path for a missed Socket.IO event;
+    // avoid issuing 30 requests per player at the deadline.
     refreshHandoff();
-    return () => { active = false; window.clearInterval(interval); };
+    const retryTimers = [1000, 2500, 5000].map((delay) => window.setTimeout(refreshHandoff, delay));
+    return () => { active = false; retryTimers.forEach((timer) => window.clearTimeout(timer)); };
   }, [expired, navigate, round?.id, round?.status]);
 
   useEffect(() => {
