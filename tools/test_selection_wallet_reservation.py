@@ -127,8 +127,10 @@ assert 'lock_timeout_ms=None' in (ROOT / 'firestore_db.py').read_text()
 assert 'pool_snapshot = {' in gateway
 assert '"pending_selections": result.get(\'_pending\', {})' in gateway
 assert '"selected_cartelas": result.get("selected_cartelas", [])' in gateway
+assert 'setLiveDerashPool((previous) =>' in selection
+assert 'previous ?? sharedDerashPool' in selection
 assert "applyPlayWallet" in context
-assert "walletPreview" in selection and "setLiveDerashPool(Math.round" in selection
+assert "walletPreview" in selection and "setLiveDerashPool((previous) =>" in selection
 assert "liveDerashPool" in selection
 assert "pendingRevision" in selection and "applyPoolSnapshot(result)" in selection
 assert "selectionQueue" in selection and "selectionIntents" in selection and "replayIntents" in selection
