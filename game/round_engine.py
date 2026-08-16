@@ -81,6 +81,7 @@ class RoundEngine:
         self.rounds_ref = db.collection('rounds')
         self._round_locks = {}
         self._user_locks = {}
+        self._player_cartela_cache = {}  # round_id -> (players signature, prepared cards)
 
     # ═══════════════════════════════════════════════════════════════
     # Cartela Generation (one-time, admin-triggered)
@@ -340,8 +341,16 @@ class RoundEngine:
             return _SECURE_RANDOM.randint(min_calls, max_calls)
         return max(min_calls, min(max_calls, target))
 
-    def build_player_cartelas(self, players: Dict[str, dict]) -> Dict[str, List[dict]]:
+    def build_player_cartelas(self, players: Dict[str, dict], cache_key: Optional[str] = None) -> Dict[str, List[dict]]:
         """Load all cartelas + cached patterns for active players."""
+        signature = tuple(sorted(
+            (str(uid), tuple(sorted(int(number) for number in (info or {}).get('cartelas', []) if str(number).isdigit())))
+            for uid, info in (players or {}).items()
+        ))
+        if cache_key:
+            cached = self._player_cartela_cache.get(str(cache_key))
+            if cached and cached[0] == signature:
+                return cached[1]
         if not _CARTELA_CACHE:
             try:
                 docs = self.master_ref.get()
@@ -368,6 +377,10 @@ class RoundEngine:
                     'flat': flat,
                     'patterns': patterns,
                 })
+        if cache_key:
+            self._player_cartela_cache[str(cache_key)] = (signature, player_cartelas)
+            while len(self._player_cartela_cache) > 32:
+                self._player_cartela_cache.pop(next(iter(self._player_cartela_cache)))
         return player_cartelas
 
     def _entry_patterns(self, entry: dict) -> List[List[int]]:
@@ -566,7 +579,7 @@ class RoundEngine:
         next_call_index = len(called) + 1
         game_target = self.normalize_game_target(data.get('game_target'))
         players = data.get('players', {})
-        player_cartelas = self.build_player_cartelas(players)
+        player_cartelas = self.build_player_cartelas(players, cache_key=round_id)
         number = available[0]
         target_winner = data.get('target_winner')
         if not target_winner:

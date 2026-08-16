@@ -3115,10 +3115,10 @@ async def room_intent(sid, data):
             cache.pop(next(iter(cache)))
         await sio.emit("room_ack", ack, to=sid)
         if "error" not in result:
-            await _emit_room_compat_updates(round_id, user_id, result)
-        state = await _emit_room_state(round_id, user_id)
-        ack["status"] = state.get("status")
-        ack["round"] = state.get("round")
+            # The durable mutation and ack are the latency-critical path. Pool,
+            # snapshot, and full room-state fanout can follow asynchronously.
+            asyncio.create_task(_emit_room_compat_updates(round_id, user_id, result))
+            asyncio.create_task(_emit_room_state(round_id, user_id))
         return ack
 
 
@@ -3286,6 +3286,14 @@ async def broadcast_cartela_pool(round_id: str):
 
 
 # ─── Background event broadcaster ───
+def _coalesce_events(events):
+    """Keep only the newest event for each document in one poll batch."""
+    latest = {}
+    for event in events:
+        latest[(event.collection, event.doc_id)] = event
+    return sorted(latest.values(), key=lambda event: (event.created_at, event.id))
+
+
 def _latest_event_cursor():
     """Return the newest durable event so startup does not replay old history."""
     sess = SessionLocal()
@@ -3311,6 +3319,8 @@ async def _event_broadcast_loop():
                 last_created_at,
                 last_event_id,
             )
+            if len(events) > 1:
+                events = _coalesce_events(events)
             for ev in events:
                 last_created_at = ev.created_at
                 last_event_id = ev.id
