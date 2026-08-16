@@ -17,14 +17,19 @@ assert "_start_game_loop(round_id)" in gateway[gateway.index("async def join_rou
 assert "confirmStarted.current = false" in select
 assert "const recovered" in select
 assert 'latest.status === "completed"' in select
+assert 'latest.status === "playing"' in select
+assert 'navigate(`/game?round=${encodeURIComponent(targetId)}`' in select
+assert 'setExpired(true)' in select
 assert 'latest.status !== "selecting"' not in select
 assert "primeRoundSnapshot" in select and "primeRoundSnapshot" in realtime
 assert "const serverRound = await playerApi.round" not in select
 assert "cartelaCache" in client
 assert '"SYNCING…"' not in select and '"GO"' in select
 assert "committedWallet" in select and "setCommittedWallet(balance)" in select
-assert "initialPlayerCartelas" in select and "playerCartelas.length" in select
-assert 'This round started without your cartelas' in select
+assert "playerCartelas" in select
+assert "cartelas.length === 0" in game
+assert 'Spectating mode' in game
+assert 'This round started without your cartelas' not in select
 assert 'latest.status === "completed") navigate("/", { replace: true })' in select
 assert '"Play now"' not in select
 assert "confirmOpen" not in select and "<Dialog" not in select
