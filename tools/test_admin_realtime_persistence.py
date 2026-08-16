@@ -12,6 +12,11 @@ assert "useCallback" in dashboard and "useRef" in dashboard
 assert "const loadVersion = useRef(0)" in dashboard
 assert "if (version !== loadVersion.current) return" in dashboard
 assert "realtimeRevision === 0 ? 0 : 180" in dashboard
+assert "const [isRefreshing, setIsRefreshing] = useState(false)" in dashboard
+assert "{loading ? <Loading />" not in dashboard
+assert "{error ? <State" not in dashboard
+assert "Updating live data" in dashboard and "Retry live sync" in dashboard
+assert "}, []);" in dashboard
 assert "<CartelasSection refreshToken={realtimeRevision} />" in dashboard
 assert "<SettingsSection refreshToken={realtimeRevision} />" in dashboard
 assert "<BotContentSection refreshToken={realtimeRevision} />" in dashboard
