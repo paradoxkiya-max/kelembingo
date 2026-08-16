@@ -372,18 +372,44 @@ class RoundEngine:
         joined_at = (players or {}).get(user_id, {}).get('joined_at') or "9999-12-31T23:59:59"
         return (str(joined_at), int(cartela_number), str(user_id))
 
-    def choose_single_winner(self, winners: List[dict], players: Dict[str, dict]) -> Optional[dict]:
-        """Pick exactly one player deterministically when multiple players hit."""
+    def choose_single_winner(
+        self,
+        winners: List[dict],
+        players: Dict[str, dict],
+        round_id: Optional[str] = None,
+        call_count: Optional[int] = None,
+    ) -> Optional[dict]:
+        """Choose one valid winner without favoring join order.
+
+        The round engine still stores exactly one player and one cartela, but a
+        simultaneous valid hit is resolved from a server-only HMAC selection
+        over the canonical candidate list. This avoids the previous first-join
+        bias while keeping the result deterministic for retries.
+        """
         if not winners:
             return None
-        return min(
+        candidates = sorted(
             winners,
             key=lambda item: self._winner_sort_key(
-                item.get('user_id', ''),
-                item.get('cartela_number', 0),
+                str(item.get('user_id', '')),
+                int(item.get('cartela_number', 0)),
                 players,
             ),
         )
+        if len(candidates) == 1 or round_id is None:
+            return candidates[0]
+        import hashlib, hmac
+        secret = str(
+            os.getenv('NUMBER_DRAW_SECRET')
+            or os.getenv('JWT_SECRET')
+            or 'local-development-draw-secret'
+        )
+        digest = hmac.new(
+            secret.encode('utf-8'),
+            f"winner:{round_id}:{int(call_count or 0)}".encode('utf-8'),
+            hashlib.sha256,
+        ).digest()
+        return candidates[int.from_bytes(digest[:8], 'big') % len(candidates)]
 
     def choose_single_winning_cartela(self, round_id: str, user_id: int,
                                       winning_cartelas: List[int], call_count: int) -> Optional[int]:
