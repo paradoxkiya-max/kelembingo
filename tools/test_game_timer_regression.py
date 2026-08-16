@@ -13,7 +13,9 @@ checks = {
     "selection_expiry_countdown": "round?.status === \"selecting\"" in source and "round?.selection_deadline" in source,
     "called_numbers_state": "round?.called_numbers" in source and "called.size" in source,
     "playback_deduplication": "previous !== null" in source and "calledNumbers.length > previous.length" in source,
-    "go_transition_label": '"Syncing…"' not in source and '"Starting…"' not in source and '"Go"' in source,
+    "go_transition_label": '"Syncing…"' in source and '"Go"' in source,
+    "stale_deadline_guard": "nextCalls === previousCalls" in source and "nextDeadline < previousDeadline" in source,
+    "periodic_round_resync": "playerApi.round(roundId)" in source and "setInterval(refreshRound, 10000)" in source,
     "four_second_client_warmup": "timer > 4 || timer < 1" in source and "warmNumberAudio" in source,
     "strict_server_five_seconds": "NUMBER_CALL_INTERVAL = 5" in gateway and "timedelta(seconds=5)" in settlement,
 }

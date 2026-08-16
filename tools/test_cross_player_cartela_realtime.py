@@ -20,7 +20,9 @@ mutation_start = api.index("def _mutate_pending_selection_sync(")
 mutation_end = api.index('@app.post("/api/rounds/{round_id}/select")', mutation_start)
 mutation = api[mutation_start:mutation_end]
 assert "transaction.update(round_ref" in mutation
-assert "pending_reservations" in mutation
+assert "pending_revision" in mutation
+assert "lastPoolSnapshotFingerprint" in selection_test or "lastPoolSnapshotFingerprint" in (ROOT / "dashboard-react/client/src/pages/CartelaSelect.tsx").read_text()
+assert "fingerprint !== lastPoolSnapshotFingerprint.current" in (ROOT / "dashboard-react/client/src/pages/CartelaSelect.tsx").read_text()
 assert "sess.commit()" in (ROOT / "firestore_db.py").read_text()
 assert "persisted_first[\"pending_selections\"][\"77\"] == [12]" in selection_test
 assert "persisted_after_first_release[\"pending_selections\"][\"77\"] == [35]" in selection_test

@@ -57,6 +57,16 @@ export default function GameBoard() {
       const previousCalls = previous.called_numbers?.length || 0;
       const nextCalls = next.called_numbers?.length || 0;
       if (nextCalls < previousCalls || statusRank(next.status) < statusRank(previous.status)) return previous;
+
+      // Socket.IO and the durable event bridge can deliver two snapshots out
+      // of order. For the same call count, never let an older deadline replace
+      // the newer one, otherwise the visible clock can jump back to "Go".
+      if (nextCalls === previousCalls) {
+        const previousDeadline = previous.next_number_at ? new Date(previous.next_number_at).getTime() : 0;
+        const nextDeadline = next.next_number_at ? new Date(next.next_number_at).getTime() : 0;
+        if (previousDeadline > 0 && nextDeadline > 0 && nextDeadline < previousDeadline) return previous;
+      }
+
       return next;
     });
   }, []);
@@ -138,6 +148,21 @@ export default function GameBoard() {
     return () => window.clearInterval(interval);
   }, [round?.next_number_at, round?.selection_deadline, round?.status, serverClockOffset]);
 
+  // Realtime is the fast path, but a short REST resync repairs a missed or
+  // out-of-order snapshot after a reconnect, background-tab pause, or proxy
+  // delay. This keeps the display aligned with the authoritative round clock.
+  useEffect(() => {
+    if (!roundId || round?.status !== "playing") return;
+    let active = true;
+    const refreshRound = () => {
+      void playerApi.round(roundId)
+        .then(({ round: latest }) => { if (active) applyRound(latest); })
+        .catch(() => undefined);
+    };
+    const interval = window.setInterval(refreshRound, 10000);
+    return () => { active = false; window.clearInterval(interval); };
+  }, [applyRound, round?.status, roundId]);
+
   useEffect(() => {
     if (audioWarmupDone.current || round?.status !== "playing" || timer > 4 || timer < 1) return;
     audioWarmupDone.current = true;
@@ -203,7 +228,7 @@ export default function GameBoard() {
 
   const isSpectator = !cardsLoading && cartelas.length === 0;
   const roundStatusLabel = round.status === "completed" ? "Round complete" : round.status === "selecting" ? `Selection ${countdown > 0 ? `${countdown}s` : "Go"}` : isSpectator ? "Spectating live" : "Live game";
-  const displayTimer = round.status === "selecting" ? (countdown > 0 ? `${countdown}s` : "Go") : timer > 0 ? `${timer}s` : "Go";
+  const displayTimer = round.status === "selecting" ? (countdown > 0 ? `${countdown}s` : "Go") : timer > 0 ? `${timer}s` : "Syncing…";
   const sharedDerashPool = roundDerashPool(round);
 
   return <div className="flex min-h-[calc(100vh-56px)] flex-col bg-[linear-gradient(180deg,#0D1117_0%,#0A0F18_50%,#111827_100%)] px-2 py-1">

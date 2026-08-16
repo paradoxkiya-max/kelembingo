@@ -51,6 +51,7 @@ export default function CartelaSelect() {
   const confirmStarted = useRef(false);
   const previewFetches = useRef(new Set<number>());
   const pendingRevision = useRef(0);
+  const lastPoolSnapshotFingerprint = useRef("");
   const selectedRef = useRef<number[]>([]);
   const authoritativeSelectedRef = useRef<number[]>([]);
   const selectionIntents = useRef<SelectionIntent[]>([]);
@@ -92,8 +93,18 @@ export default function CartelaSelect() {
   const applyPoolSnapshot = useCallback((snapshot: PoolSnapshot) => {
     const revision = Math.max(0, Number(snapshot.pending_revision) || 0);
     if ((!revision && pendingRevision.current > 0) || (revision && revision < pendingRevision.current)) return null;
-    if (revision) pendingRevision.current = revision;
     const nextPending = snapshot.pending_selections || {};
+    const fingerprint = JSON.stringify({
+      revision,
+      taken_cartelas: (snapshot.taken_cartelas || []).map(Number).sort((a, b) => a - b),
+      pending_selections: nextPending,
+    });
+    // A duplicate revision must describe the same committed transaction. If
+    // it does not, the event bridge delivered an older conflicting snapshot;
+    // applying it would resurrect a deselected card or make it appear taken.
+    if (revision === pendingRevision.current && lastPoolSnapshotFingerprint.current && fingerprint !== lastPoolSnapshotFingerprint.current) return null;
+    if (revision) pendingRevision.current = revision;
+    lastPoolSnapshotFingerprint.current = fingerprint;
     const authoritative = normalizeCartelas(nextPending[String(player?.user_id || "")] || []);
     authoritativeSelectedRef.current = authoritative;
     setTaken(new Set((snapshot.taken_cartelas || []).map(Number)));
@@ -139,6 +150,7 @@ export default function CartelaSelect() {
       setLiveDerashPool(null);
       setCommittedWallet(null);
       pendingRevision.current = Math.max(0, Number(nextRound?.pending_revision) || 0);
+      lastPoolSnapshotFingerprint.current = "";
       authoritativeSelectedRef.current = normalizeCartelas(nextRound?.pending_selections?.[String(player?.user_id || "")] || []);
       if (nextRound?.id) primeRoundSnapshot(String(nextRound.id), nextRound);
       setTaken(new Set((nextRound?.taken_cartelas || []).map(Number)));
