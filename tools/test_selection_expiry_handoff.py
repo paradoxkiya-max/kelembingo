@@ -28,6 +28,9 @@ assert '"SYNCING…"' not in select and '"GO"' in select
 assert "observeRealtimeReconnect" in select and "No active round is available yet. Please try again." in select
 assert "committedWallet" in select and "setCommittedWallet(balance)" in select
 assert "authoritativeSelectedRef" in select and "applyPoolSnapshot" in select
+assert "const pendingSelection = selectedRef.current" in select
+assert "STARTING…" in select
+assert "const interval = window.setInterval(refreshHandoff, 500)" in select
 assert "cartelas.length === 0" in game
 assert 'Spectating mode' in game
 assert 'This round started without your cartelas' not in select
