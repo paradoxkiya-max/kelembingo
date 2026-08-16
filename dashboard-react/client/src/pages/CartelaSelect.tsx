@@ -199,18 +199,29 @@ export default function CartelaSelect() {
           // same-revision pool with conflicting contents.
           if (hasPoolState && nextRevision < currentRevision) return;
           if (hasPoolState && nextRevision === currentRevision && currentRevision > 0 && lastPoolSnapshotFingerprint.current && nextFingerprint !== lastPoolSnapshotFingerprint.current) return;
+          const playerId = String(player?.user_id || "");
+          const joinedCartelas = normalizeCartelas(latest.players?.[playerId]?.cartelas || []);
           setRound(latest);
           if (hasPoolState) {
             pendingRevision.current = nextRevision;
             lastPoolSnapshotFingerprint.current = nextFingerprint;
-            const authoritative = normalizeCartelas(latest.pending_selections?.[String(player?.user_id || "")] || []);
+            const authoritative = normalizeCartelas(latest.pending_selections?.[playerId] || []);
             authoritativeSelectedRef.current = authoritative;
             setTaken(new Set((latest.taken_cartelas || []).map(Number)));
             setPending(latest.pending_selections || {});
             publishSelected(replayIntents(authoritative, selectionIntents.current));
           }
-          if (latest.status === "playing") { const targetId = String(latest.id || nextRound.id); primeRoundSnapshot(targetId, latest); publishSelected([]); setWalletPreview(null); setExpired(true); navigate(`/game?round=${encodeURIComponent(targetId)}`, { replace: true }); }
-          else if (latest.status === "completed") navigate("/", { replace: true });
+          // A joined player must never remain on the selection grid. The
+          // players snapshot can arrive just before the status=playing snapshot,
+          // so redirect on either signal without waiting for another event.
+          if (latest.status === "playing" || joinedCartelas.length > 0) {
+            const targetId = String(latest.id || nextRound.id);
+            primeRoundSnapshot(targetId, latest);
+            publishSelected([]);
+            setWalletPreview(null);
+            setExpired(true);
+            navigate(`/game?round=${encodeURIComponent(targetId)}`, { replace: true });
+          } else if (latest.status === "completed") navigate("/", { replace: true });
         };
         unsubscribeRound = observeRound(nextRound.id, (latest) => {
           if (latest) applyRoundSnapshot(latest);
@@ -218,7 +229,8 @@ export default function CartelaSelect() {
         unsubscribeReconnect = observeRealtimeReconnect(() => {
           void playerApi.round(String(nextRound.id)).then(({ round: latest }) => applyRoundSnapshot(latest)).catch(() => undefined);
         });
-        if (nextRound.status === "playing") { const targetId = String(nextRound.id); primeRoundSnapshot(targetId, nextRound); publishSelected([]); setWalletPreview(null); setExpired(true); navigate(`/game?round=${encodeURIComponent(targetId)}`, { replace: true }); }
+        const joinedCartelas = normalizeCartelas(nextRound.players?.[String(player?.user_id || "")]?.cartelas || []);
+        if (nextRound.status === "playing" || joinedCartelas.length > 0) { const targetId = String(nextRound.id); primeRoundSnapshot(targetId, nextRound); publishSelected([]); setWalletPreview(null); setExpired(true); navigate(`/game?round=${encodeURIComponent(targetId)}`, { replace: true }); }
         else if (nextRound.status === "completed") navigate("/", { replace: true });
       }
     }).catch((e) => active && selectionEpoch.current === epoch && setLoadError(e instanceof Error ? e.message : "Unable to load this round")).finally(() => active && selectionEpoch.current === epoch && setLoading(false));
@@ -332,12 +344,23 @@ export default function CartelaSelect() {
         }
       } catch (e) {
         if (selectionEpoch.current !== epoch || currentRoundId.current !== roundId) return;
+        const message = e instanceof Error ? e.message : "Selection failed";
+        if (/already joined|opening the game board/i.test(message)) {
+          const latest = await playerApi.round(roundId).then((response) => response.round).catch(() => null);
+          if (latest?.id) {
+            const targetId = String(latest.id);
+            primeRoundSnapshot(targetId, latest);
+            setExpired(true);
+            navigate(`/game?round=${encodeURIComponent(targetId)}`, { replace: true });
+            return;
+          }
+        }
         selectionIntents.current = selectionIntents.current.filter((item) => item.id !== intent.id);
         const authoritative = authoritativeSelectedRef.current;
         publishSelected(replayIntents(authoritative, selectionIntents.current));
         setWalletPreview(null);
         setLiveDerashPool(null);
-        setError(e instanceof Error ? e.message : "Selection failed");
+        setError(message);
       }
     };
     selectionQueue.current = selectionQueue.current.then(execute, execute);

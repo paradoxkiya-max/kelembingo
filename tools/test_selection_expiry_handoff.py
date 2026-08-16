@@ -20,7 +20,10 @@ assert "confirmStarted.current = false" in select
 assert "const recovered" in select
 assert 'latest.status === "completed"' in select
 assert 'latest.status === "playing"' in select
+assert 'joinedCartelas.length > 0' in select
 assert 'navigate(`/game?round=${encodeURIComponent(targetId)}`' in select
+assert 'Cartela already joined; opening the game board' in gateway
+assert 'attempts >= 30' not in select
 assert 'setExpired(true)' in select
 assert 'latest.status !== "selecting"' not in select
 assert "primeRoundSnapshot" in select and "primeRoundSnapshot" in realtime

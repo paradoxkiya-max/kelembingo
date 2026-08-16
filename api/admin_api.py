@@ -1339,6 +1339,16 @@ def _mutate_pending_selection_sync(
         } if isinstance(raw_pending, dict) else {}
         selected = [int(number) for number in pending.get(user_id, []) if str(number).isdigit()]
         selected = list(dict.fromkeys(number for number in selected if 1 <= number <= TOTAL_CARTELAS))
+        joined_player = (round_data.get('players', {}) or {}).get(user_id, {})
+        joined_cartelas = {
+            int(number) for number in (joined_player.get('cartelas', []) or [])
+            if str(number).isdigit() and 1 <= int(number) <= TOTAL_CARTELAS
+        }
+        if joined_cartelas:
+            return {
+                "error": "Cartela already joined; opening the game board",
+                "joined_cartelas": sorted(joined_cartelas),
+            }
         raw_reservations = round_data.get('pending_reservations', {})
         reservations = {
             str(uid): list(numbers) if isinstance(numbers, list) else []
