@@ -29,7 +29,6 @@ assert "This round is complete. The next round is open from the Game tab." not i
 assert "WinnerAnnouncement" in game and "returnCountdown" in game
 assert 'setReturnCountdown(10)' in game and 'returnCountdown === 0' in game
 assert 'This round closed before your cartelas could be confirmed' not in select
-assert 'latest.status === "completed") navigate("/", { replace: true })' in select
 assert "Returning to cartela selection in" in winner_popup and "You" in winner_popup
 history = (ROOT / "dashboard-react/client/src/pages/History.tsx").read_text()
 assert "My Recent Games" in history and "playerApi.history()" in history and "playerId" in history

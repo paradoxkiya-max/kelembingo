@@ -805,7 +805,7 @@ async def _provision_next_round(stake: int = DEFAULT_STAKE):
 
 
 async def _game_loop(round_id: str):
-    """Background task: wait for selection deadline, then start if players exist."""
+    """Background task owning the server deadline and full round lifecycle."""
     try:
         while True:
             round_doc = await _db(lambda: db.collection('rounds').document(round_id).get())
@@ -815,11 +815,10 @@ async def _game_loop(round_id: str):
             status = data.get('status')
 
             if status == 'completed':
-                # Empty rounds must not create an endless chain of idle rounds.
-                # Real player rounds are provisioned again by their settlement
-                # paths; abandoned rounds simply terminate here.
-                if int(data.get('player_count', 0) or 0) > 0:
-                    await _provision_next_round(int(data.get('stake', DEFAULT_STAKE) or DEFAULT_STAKE))
+                # Every completed round, including an empty one, hands off to
+                # the next server-owned selecting round. This keeps the 45s
+                # clock continuous even when nobody is watching the UI.
+                await _provision_next_round(int(data.get('stake', DEFAULT_STAKE) or DEFAULT_STAKE))
                 return
             if status is None:
                 return
@@ -892,6 +891,7 @@ async def _game_loop(round_id: str):
                             'completed_at': datetime.now(tz=timezone.utc),
                         }))
                         await broadcast_event('rounds', round_id)
+                        await _provision_next_round(int(final_data.get('stake', DEFAULT_STAKE) or DEFAULT_STAKE))
                         return
 
             await asyncio.sleep(1)
@@ -1174,14 +1174,19 @@ async def start_background_monitor():
                             logger.info(f"[Monitor] Resuming orphaned playing round {rid}")
                             _start_game_loop(rid)
 
-                    # Rounds are provisioned on demand by create_round(stake),
-                    # or immediately after a real player round completes. Do not
-                    # create idle rounds for every stake on every monitor cycle;
-                    # that wastes database writes and usage on an empty lobby.
+                    # Startup and each round loop maintain one continuous
+                    # server-owned selecting/playing round per configured stake.
+                    # The monitor only resumes orphaned loops after restarts.
 
                 except Exception as e:
                     logger.warning(f"Error in background monitor: {e}")
                 await asyncio.sleep(5)
+
+        # Start one server-owned round per configured stake on every gateway
+        # restart. The monitor and each round loop then keep the deadlines moving
+        # continuously, even when no player has opened the WebApp.
+        for stake in VALID_STAKES:
+            await _provision_next_round(stake)
 
         asyncio.create_task(_monitor())
         asyncio.create_task(_event_broadcast_loop())

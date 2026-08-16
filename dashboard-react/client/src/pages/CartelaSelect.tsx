@@ -75,6 +75,13 @@ export default function CartelaSelect() {
   const currentRoundId = useRef("");
   const deadlineHandoff = useRef(false);
 
+  const abortSelectionQueue = useCallback(() => {
+    selectionEpoch.current += 1;
+    currentRoundId.current = "";
+    selectionIntents.current = [];
+    selectionQueue.current = Promise.resolve();
+  }, []);
+
   const wallet = walletValue(player?.play_wallet);
   const displayedWallet = walletPreview ?? committedWallet ?? wallet;
   const sharedCartelaCount = useMemo(() => {
@@ -108,6 +115,7 @@ export default function CartelaSelect() {
   const restartSelection = useCallback(() => {
     if (deadlineHandoff.current) return;
     deadlineHandoff.current = true;
+    abortSelectionQueue();
     setBusy(false);
     setExpired(false);
     setLoading(true);
@@ -120,7 +128,7 @@ export default function CartelaSelect() {
     setWalletPreview(null);
     publishSelected([]);
     setLoadAttempt((value) => value + 1);
-  }, [publishSelected]);
+  }, [abortSelectionQueue, publishSelected]);
 
   const applyPoolSnapshot = useCallback((snapshot: PoolSnapshot) => {
     const revision = Math.max(0, Number(snapshot.pending_revision) || 0);
@@ -235,12 +243,13 @@ export default function CartelaSelect() {
           // so redirect on either signal without waiting for another event.
           if (latest.status === "playing" || joinedCartelas.length > 0) {
             const targetId = String(latest.id || nextRound.id);
+            abortSelectionQueue();
             primeRoundSnapshot(targetId, latest);
             publishSelected([]);
             setWalletPreview(null);
             setExpired(true);
             navigate(`/game?round=${encodeURIComponent(targetId)}`, { replace: true });
-          } else if (latest.status === "completed") navigate("/", { replace: true });
+          } else if (latest.status === "completed") restartSelection();
         };
         unsubscribeRound = observeRound(nextRound.id, (latest) => {
           if (latest) applyRoundSnapshot(latest);
@@ -249,12 +258,12 @@ export default function CartelaSelect() {
           void playerApi.round(String(nextRound.id)).then(({ round: latest }) => applyRoundSnapshot(latest)).catch(() => undefined);
         });
         const joinedCartelas = normalizeCartelas(nextRound.players?.[String(player?.user_id || "")]?.cartelas || []);
-        if (nextRound.status === "playing" || joinedCartelas.length > 0) { const targetId = String(nextRound.id); primeRoundSnapshot(targetId, nextRound); publishSelected([]); setWalletPreview(null); setExpired(true); navigate(`/game?round=${encodeURIComponent(targetId)}`, { replace: true }); }
-        else if (nextRound.status === "completed") navigate("/", { replace: true });
+        if (nextRound.status === "playing" || joinedCartelas.length > 0) { const targetId = String(nextRound.id); abortSelectionQueue(); primeRoundSnapshot(targetId, nextRound); publishSelected([]); setWalletPreview(null); setExpired(true); navigate(`/game?round=${encodeURIComponent(targetId)}`, { replace: true }); }
+        else if (nextRound.status === "completed") restartSelection();
       }
     }).catch((e) => active && selectionEpoch.current === epoch && setLoadError(e instanceof Error ? e.message : "Unable to load this round")).finally(() => active && selectionEpoch.current === epoch && setLoading(false));
     return () => { active = false; selectionEpoch.current += 1; currentRoundId.current = ""; unsubscribePool?.(); unsubscribeRound?.(); unsubscribeReconnect?.(); };
-  }, [applyPoolSnapshot, loadAttempt, navigate, publishSelected, stake, player?.user_id]);
+  }, [abortSelectionQueue, applyPoolSnapshot, loadAttempt, navigate, publishSelected, restartSelection, stake, player?.user_id]);
 
   useEffect(() => {
     let active = true;
@@ -307,10 +316,11 @@ export default function CartelaSelect() {
         if (!active) return;
         if (latest.status === "playing") {
           const targetId = String(latest.id || round.id);
+          abortSelectionQueue();
           primeRoundSnapshot(targetId, latest);
           navigate(`/game?round=${encodeURIComponent(targetId)}`, { replace: true });
         } else if (latest.status === "completed") {
-          navigate("/", { replace: true });
+          restartSelection();
         }
       }).catch(() => undefined);
     };
@@ -353,6 +363,7 @@ export default function CartelaSelect() {
     setLiveDerashPool((previous) => Math.round(Math.max(0, (previous ?? sharedDerashPool) + (isSelected ? -stake * 0.80 : stake * 0.80)) * 100) / 100);
     setWalletPreview((preview) => Math.max(0, (preview ?? committedWallet ?? wallet) + (isSelected ? stake : -stake)));
     const execute = async () => {
+      if (selectionEpoch.current !== epoch || currentRoundId.current !== roundId || deadlineHandoff.current) return;
       try {
         const result = await (intent.selecting
           ? playerApi.selectCartela(roundId, userId, number, intent.id)
@@ -379,6 +390,7 @@ export default function CartelaSelect() {
             primeRoundSnapshot(targetId, latest);
             setExpired(true);
             if (latest.status === "playing" || joined.length > 0) {
+              abortSelectionQueue();
               navigate(`/game?round=${encodeURIComponent(targetId)}`, { replace: true });
             } else {
               restartSelection();
@@ -422,12 +434,14 @@ export default function CartelaSelect() {
       try { await playerApi.joinRound(activeRound.id, player.user_id, committedSelection, displayName); }
       catch (joinError) { if (!/already joined/i.test(joinError instanceof Error ? joinError.message : "")) throw joinError; }
       primeRoundSnapshot(String(activeRound.id), { ...activeRound, players: { ...(activeRound.players || {}), [String(player.user_id)]: { cartelas: committedSelection, name: displayName } } });
+      abortSelectionQueue();
       navigate(`/game?round=${encodeURIComponent(activeRound.id)}`, { replace: true });
     } catch (e) {
       const activeRoundId = round?.id;
       const latest = activeRoundId ? await playerApi.round(activeRoundId).then((response) => response.round).catch(() => null) : null;
       const recovered = Boolean(latest?.players?.[String(player.user_id)]?.cartelas?.length);
       if (recovered || latest?.status === "playing") {
+        abortSelectionQueue();
         navigate(`/game?round=${encodeURIComponent(String(latest?.id || activeRoundId))}`, { replace: true });
         return;
       }

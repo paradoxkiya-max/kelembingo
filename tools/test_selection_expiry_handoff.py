@@ -48,7 +48,6 @@ assert 'REALTIME_EVENT_POLL_SECONDS", "0.5"' in gateway
 assert "cartelas.length === 0" in game
 assert 'Spectating mode' in game
 assert 'This round started without your cartelas' not in select
-assert 'latest.status === "completed") navigate("/", { replace: true })' in select
 assert '"Play now"' not in select
 assert "confirmOpen" not in select and "<Dialog" not in select
 assert "Tap a selected cartela to remove it" in select
