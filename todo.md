@@ -30,3 +30,9 @@
 - [x] Audit gateway loops, database writers, transactions, and settlement side effects for round-plan drift
 - [x] Add targeted fixes only for verified lag, duplicate-writer, stale-snapshot, or navigation-race causes
 - [x] Validate the audit findings with lag, realtime, lifecycle, frontend, and database regressions
+- [x] Confirm the latest PR #49 commit has green GitHub CI
+- [x] Merge PR #49 into main and delete the feature branch
+- [x] Verify origin/main points to the merged side-effect hardening commit
+- [x] Eliminate Derash pool rollback while two cartela selection intents are queued
+- [x] Rebalance phase-one safe calls so multiple cartelas make credible progress without early Bingo
+- [x] Validate Derash stability and 15–30 one-winner distribution after the changes

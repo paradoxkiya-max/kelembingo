@@ -134,6 +134,7 @@ assert "walletPreview" in selection and "setLiveDerashPool((previous) =>" in sel
 assert "liveDerashPool" in selection
 assert "pendingRevision" in selection and "applyPoolSnapshot(result)" in selection
 assert "selectionQueue" in selection and "selectionIntents" in selection and "replayIntents" in selection
+assert "queuedCardDelta" in selection and "displayedPool" in selection
 assert "applyPoolSnapshot" in selection and "selectionEpoch" in selection
 assert "const CartelaGrid = memo" in selection and "pendingTaken" in selection
 assert "request_id: requestId" in (ROOT / "dashboard-react" / "client" / "src" / "lib" / "gateway.ts").read_text()

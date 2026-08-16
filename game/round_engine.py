@@ -539,37 +539,59 @@ class RoundEngine:
             target_winner = self._select_predetermined_winner(player_cartelas)
         winning_pattern = set(target_winner.get('pattern', [])) if target_winner else set()
 
-        # Phase 1: choose a random safe number before the target call. Prefer
-        # the selected pattern when it remains safe, but leave one pattern
-        # number for Phase 2 so no cartela can win early.
+        # Phase 1: create broad, credible progress without allowing an early
+        # Bingo. Target-pattern numbers are deliberately delayed until they
+        # are mathematically required to finish within the 15–30 call window;
+        # otherwise every cartela has a chance to look competitive.
         if next_call_index < game_target:
-            _SECURE_RANDOM.shuffle(available)
-            chosen = None
-            if target_winner and len(winning_pattern - called_set) > 1:
-                for candidate in available:
-                    if candidate not in winning_pattern:
-                        continue
-                    simulated = called_set | {candidate}
-                    if any(
-                        self._has_winner(self._entry_patterns(entry), simulated)
-                        for cartelas in player_cartelas.values()
-                        for entry in cartelas
-                    ):
-                        continue
-                    chosen = candidate
-                    break
-            if chosen is None:
-                for candidate in available:
-                    simulated = called_set | {candidate}
-                    if any(
-                        self._has_winner(self._entry_patterns(entry), simulated)
-                        for cartelas in player_cartelas.values()
-                        for entry in cartelas
-                    ):
-                        continue
-                    chosen = candidate
-                    break
-            number = chosen if chosen is not None else available[0]
+            safe_candidates = []
+            for candidate in available:
+                simulated = called_set | {candidate}
+                if any(
+                    self._has_winner(self._entry_patterns(entry), simulated)
+                    for cartelas in player_cartelas.values()
+                    for entry in cartelas
+                ):
+                    continue
+                safe_candidates.append(candidate)
+
+            target_missing = [n for n in winning_pattern if n not in called_set]
+            phase_two_slots = GAME_LENGTH_RANGE[1] - game_target + 1
+            required_before_phase_two = max(0, len(target_missing) - phase_two_slots)
+            remaining_phase_one_calls = game_target - next_call_index
+            forced_target = required_before_phase_two >= remaining_phase_one_calls
+            if forced_target:
+                candidates = [n for n in safe_candidates if n in winning_pattern]
+            else:
+                candidates = [n for n in safe_candidates if n not in winning_pattern] or safe_candidates
+
+            # Favor calls that advance several cards or several incomplete
+            # patterns. Randomly choose from the strongest band rather than
+            # always choosing the single highest score, keeping the sequence
+            # non-repetitive and less visually predictive.
+            scored = []
+            for candidate in candidates:
+                simulated = called_set | {candidate}
+                progress = 0
+                for cartelas in player_cartelas.values():
+                    for entry in cartelas:
+                        before = min(
+                            sum(number not in called_set for number in pattern)
+                            for pattern in self._entry_patterns(entry)
+                        )
+                        after = min(
+                            sum(number not in simulated for number in pattern)
+                            for pattern in self._entry_patterns(entry)
+                        )
+                        if after < before:
+                            progress += 1 + max(0, 4 - after)
+                scored.append((candidate, progress))
+            if scored:
+                best_score = max(score for _, score in scored)
+                suspense_band = [candidate for candidate, score in scored if score >= best_score * 0.70]
+                number = _SECURE_RANDOM.choice(suspense_band)
+            else:
+                number = _SECURE_RANDOM.choice(available)
         else:
             # Phase 2: call the selected winner's remaining pattern numbers.
             picked = next(
