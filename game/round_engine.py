@@ -161,8 +161,22 @@ class RoundEngine:
     # ═══════════════════════════════════════════════════════════════
     # Round Lifecycle
     # ═══════════════════════════════════════════════════════════════
+    @staticmethod
+    def _expired_empty_selection(data: dict) -> bool:
+        """Identify a dead selecting round that can be closed and replaced."""
+        if data.get('status') != 'selecting' or int(data.get('player_count', 0) or 0) > 0:
+            return False
+        deadline = _parse_dt(data.get('selection_deadline'))
+        if deadline is None or datetime.now(tz=timezone.utc) < deadline:
+            return False
+        for field in ('pending_selections', 'pending_reservations'):
+            pending = data.get(field) or {}
+            if isinstance(pending, dict) and any(values for values in pending.values() if values):
+                return False
+        return True
+
     async def get_active_round(self, stake: int = DEFAULT_STAKE) -> Optional[dict]:
-        """Find the newest selecting/playing round with one database query."""
+        """Find the newest non-expired selecting/playing round."""
         docs = list(self.rounds_ref
                    .where('status', 'in', ['selecting', 'playing'])
                    .where('stake', '==', stake)
@@ -171,7 +185,10 @@ class RoundEngine:
                    .get())
         if docs:
             doc = docs[0]
-            return {'id': doc.id, **doc.to_dict()}
+            data = doc.to_dict()
+            if self._expired_empty_selection(data):
+                return None
+            return {'id': doc.id, **data}
         return None
 
     async def create_round(self, stake: int = DEFAULT_STAKE) -> dict:
@@ -191,7 +208,23 @@ class RoundEngine:
             active_docs = list(transaction.query(active_query).get())
             if active_docs:
                 doc = active_docs[0]
-                return {'id': doc.id, **doc.to_dict()}
+                existing = doc.to_dict()
+                if not self._expired_empty_selection(existing):
+                    return {'id': doc.id, **existing}
+                # A player entering exactly at the 45-second boundary must not
+                # inherit an expired empty round. Close this disposable round
+                # inside the same account-locked transaction before provisioning
+                # its replacement, so concurrent entrants cannot receive it.
+                now = datetime.now(tz=timezone.utc)
+                transaction.update(self.rounds_ref.document(doc.id), {
+                    'status': 'completed',
+                    'winners': [],
+                    'winner_name': 'No players',
+                    'prize_per_winner': 0,
+                    'admin_profit': 0,
+                    'payout_processed': True,
+                    'completed_at': now,
+                })
 
             now = datetime.now(tz=timezone.utc)
             game_target = self.normalize_game_target()
