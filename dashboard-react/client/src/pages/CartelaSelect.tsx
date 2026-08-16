@@ -91,7 +91,7 @@ export default function CartelaSelect() {
 
   const applyPoolSnapshot = useCallback((snapshot: PoolSnapshot) => {
     const revision = Math.max(0, Number(snapshot.pending_revision) || 0);
-    if ((!revision && pendingRevision.current > 0) || (revision && revision < pendingRevision.current)) return null;
+    if ((!revision && pendingRevision.current > 0) || (revision && revision <= pendingRevision.current)) return null;
     if (revision) pendingRevision.current = revision;
     const nextPending = snapshot.pending_selections || {};
     const authoritative = normalizeCartelas(nextPending[String(player?.user_id || "")] || []);
