@@ -53,7 +53,7 @@ export async function gatewayFetch<T>(path: string, init: RequestInit = {}): Pro
   return payload as T;
 }
 
-export type Player = { id?: string | number; user_id?: string | number; first_name?: string; username?: string; phone?: string; telebirr_name?: string; play_wallet?: number | { value?: number }; bonus_wallet?: number | { value?: number }; wins?: number; total_games?: number; games_played?: number; is_playing?: boolean; status?: string };
+export type Player = { id?: string | number; user_id?: string | number; first_name?: string; username?: string; phone?: string; telebirr_name?: string; play_wallet?: number | { value?: number }; bonus_wallet?: number | { value?: number }; wins?: number; total_games?: number; games_played?: number; is_playing?: boolean; active_round_id?: string | null; active_round_ids?: string[]; status?: string };
 export type PublicStats = { active_cartelas: number; games_played: number; winners_today: number };
 export type Round = { id?: string; round_id?: string; status?: string; stake?: number; player_count?: number; derash?: number; called_numbers?: number[]; winners?: string[]; winner_name?: string; winning_cartela?: number; prize_per_winner?: number; created_at?: string | number; completed_at?: string | number; game_started_at?: string | number; next_number_at?: string | number; selection_deadline?: string | number; taken_cartelas?: number[]; pending_selections?: Record<string, number[]>; pending_revision?: number; players?: Record<string, { cartelas?: number[]; name?: string }> };
 export type Cartela = { id?: string; number: number; cartela?: number[]; data?: number[][]; grid?: number[][]; taken?: boolean; status?: string };

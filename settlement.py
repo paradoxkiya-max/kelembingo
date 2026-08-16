@@ -25,6 +25,27 @@ def _settlement_result(data, user_id, amount, status):
     }
 
 
+def _active_round_ids(user_data):
+    """Normalize new multi-stake state and the legacy single-round pointer."""
+    values = user_data.get("active_round_ids") if isinstance(user_data, dict) else None
+    ids = []
+    if isinstance(values, (list, tuple, set)):
+        ids.extend(str(value) for value in values if value not in (None, ""))
+    legacy = user_data.get("active_round_id") if isinstance(user_data, dict) else None
+    if legacy not in (None, "") and str(legacy) not in ids:
+        ids.append(str(legacy))
+    return list(dict.fromkeys(ids))
+
+
+def _active_round_state(active_ids):
+    ids = list(dict.fromkeys(str(value) for value in (active_ids or []) if value not in (None, "")))
+    return {
+        "active_round_ids": ids,
+        "is_playing": bool(ids),
+        "active_round_id": ids[-1] if ids else None,
+    }
+
+
 def create_deposit(db, deposit_data):
     """Create one pending deposit per payment transaction ID."""
     if hasattr(db, "create_deposit"):
@@ -366,6 +387,7 @@ def join_round(
                 "losses": 0,
                 "is_playing": False,
                 "active_round_id": None,
+                "active_round_ids": [],
                 "created_at": now,
                 "updated_at": now,
             }
@@ -373,10 +395,7 @@ def join_round(
         else:
             user_data = user_doc.to_dict()
 
-        if user_data.get("is_playing") and user_data.get("active_round_id") != round_id:
-            active_round = user_data.get("active_round_id")
-            suffix = f" ({active_round})" if active_round else ""
-            return {"error": f"You are already playing in an active round{suffix}"}
+        active_round_ids = _active_round_ids(user_data)
         try:
             wallet = float(user_data.get("play_wallet", 0) or 0)
         except (TypeError, ValueError):
@@ -387,10 +406,11 @@ def join_round(
             }
 
         now = datetime.now(tz=timezone.utc)
+        if round_id not in active_round_ids:
+            active_round_ids.append(round_id)
         transaction.update(user_ref, {
             "play_wallet": round(wallet - total_cost, 2),
-            "is_playing": True,
-            "active_round_id": round_id,
+            **_active_round_state(active_round_ids),
             "updated_at": now,
         })
         player_entry = {
@@ -488,16 +508,14 @@ def refund_no_winner(db, round_id, players=None, stake=0, idempotency_key=None):
             if not user_doc.exists:
                 continue
             user_data = user_doc.to_dict()
-            active_round = user_data.get("active_round_id")
+            active_round_ids = [active_id for active_id in _active_round_ids(user_data) if active_id != round_id]
             update = {
                 "play_wallet": float(user_data.get("play_wallet", 0) or 0) + refund,
                 "total_games": int(user_data.get("total_games", 0) or 0) + 1,
                 "losses": int(user_data.get("losses", 0) or 0) + 1,
+                **_active_round_state(active_round_ids),
                 "updated_at": now,
             }
-            if active_round in (None, round_id):
-                update["is_playing"] = False
-                update["active_round_id"] = None
             transaction.update(user_ref, update)
             total += refund
 

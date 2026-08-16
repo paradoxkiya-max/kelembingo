@@ -21,6 +21,7 @@ from firestore_db import (
     ArrayUnion,
 )
 from firestore_db import MockFirestoreClient
+from settlement import _active_round_ids, _active_round_state
 
 logger = logging.getLogger(__name__)
 
@@ -288,9 +289,9 @@ class RoundEngine:
         if round_id not in self._round_locks:
             self._round_locks[round_id] = asyncio.Lock()
 
-        # Lock the user first so one wallet cannot be reserved by two rounds in
-        # this gateway process. The database-level is_playing guard remains the
-        # source of truth across restarts and separate services.
+        # Lock the user first so wallet updates from two stake rounds serialize
+        # in this gateway process. The database-level active-round list remains
+        # the source of truth across restarts and separate services.
         async with self._user_locks[user_id]:
             async with self._round_locks[round_id]:
                 return await asyncio.to_thread(
@@ -959,10 +960,8 @@ class RoundEngine:
             now = datetime.now(tz=timezone.utc)
 
             def _finish_user(user_ref, user_data, update):
-                active_round = user_data.get('active_round_id')
-                if active_round in (None, round_id):
-                    update['is_playing'] = False
-                    update['active_round_id'] = None
+                active_round_ids = [active_id for active_id in _active_round_ids(user_data) if active_id != round_id]
+                update.update(_active_round_state(active_round_ids))
                 update['updated_at'] = now
                 transaction.update(user_ref, update)
 

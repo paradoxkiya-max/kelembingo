@@ -13,7 +13,7 @@ with tempfile.TemporaryDirectory() as tmp:
 
     from firestore_db import MockFirestoreClient
     from api import admin_api
-    from settlement import join_round
+    from settlement import join_round, refund_no_winner
 
     original_db = admin_api.db
     db = MockFirestoreClient()
@@ -24,6 +24,7 @@ with tempfile.TemporaryDirectory() as tmp:
             "play_wallet": 100,
             "is_playing": False,
             "active_round_id": None,
+            "active_round_ids": [],
         })
         db.collection("rounds").document(round_id).set({
             "status": "selecting",
@@ -83,11 +84,39 @@ with tempfile.TemporaryDirectory() as tmp:
         assert round_data["players"]["77"]["cartelas"] == [12], round_data
         assert round_data["pending_reservations"]["77"] == [], round_data
 
+        round20 = "selection-reservation-stake20"
+        db.collection("rounds").document(round20).set({
+            "status": "selecting",
+            "stake": 20,
+            "players": {},
+            "player_count": 0,
+            "taken_cartelas": [],
+            "pending_selections": {},
+            "pending_reservations": {},
+        })
+        cross_stake_select = admin_api._mutate_pending_selection_sync(round20, "77", 35, True, "stake20-select")
+        assert cross_stake_select["ok"] and cross_stake_select["play_wallet"] == 70, cross_stake_select
+        joined20 = join_round(db, round20, 77, [35], "Player 77", idempotency_key="stake20-join")
+        assert joined20["status"] == "joined" and joined20["cost"] == 0 and joined20["reserved_cost"] == 20, joined20
+        active_after_two = db.collection("users").document("77").get().to_dict()
+        assert active_after_two["is_playing"] is True
+        assert set(active_after_two["active_round_ids"]) == {round_id, round20}, active_after_two
+
+        refund10 = refund_no_winner(db, round_id, idempotency_key="stake10-refund")
+        assert refund10["ok"]
+        active_after_stake10 = db.collection("users").document("77").get().to_dict()
+        assert active_after_stake10["is_playing"] is True and active_after_stake10["active_round_ids"] == [round20], active_after_stake10
+        refund20 = refund_no_winner(db, round20, idempotency_key="stake20-refund")
+        assert refund20["ok"]
+        active_after_both = db.collection("users").document("77").get().to_dict()
+        assert active_after_both["is_playing"] is False and active_after_both["active_round_ids"] == [], active_after_both
+
         cancelled_round = "cancelled-before-finalizer"
         db.collection("users").document("88").set({
             "play_wallet": 100,
             "is_playing": False,
             "active_round_id": None,
+            "active_round_ids": [],
         })
         db.collection("rounds").document(cancelled_round).set({
             "status": "selecting",
@@ -115,6 +144,10 @@ context = (ROOT / "dashboard-react" / "client" / "src" / "contexts" / "PlayerCon
 
 assert "pending_reservations" in gateway
 assert 'lock_keys=[f"round:{round_id}", f"user:{user_id}"]' in gateway
+assert 'active_round_ids' in gateway
+assert 'active_round_ids' in (ROOT / "settlement.py").read_text()
+assert 'You are already playing in another active round' not in gateway
+assert 'You are already playing in an active round' not in (ROOT / "settlement.py").read_text()
 assert "await broadcast_event('users', uid_str)" in gateway
 assert "derash_pool" in gateway
 assert "require_pending=True" in gateway

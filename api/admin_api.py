@@ -23,6 +23,7 @@ from startup_state import is_database_ready
 from game.round_engine import RoundEngine, DEFAULT_STAKE, VALID_STAKES, SELECTION_DURATION, GAME_LENGTH_RANGE, DERASH_RATIO, MAX_CARTELAS_PER_PLAYER, TOTAL_CARTELAS, BINGO_NUMBERS, _parse_dt, _grid_next_number_at
 from handlers.user_manager import UserManager
 from handlers.bot_content import get_bot_text, get_config_value
+from settlement import _active_round_ids, _active_round_state
 from datetime import datetime, date, timedelta, timezone
 from sqlalchemy import and_, or_, text as sql_text
 from telegram import Bot
@@ -422,6 +423,7 @@ def _upsert_player_user(user: dict) -> dict:
         "losses": 0,
         "is_playing": False,
         "active_round_id": None,
+        "active_round_ids": [],
         "created_at": now,
         "updated_at": now,
     }
@@ -435,12 +437,7 @@ class PlayerAuthRequest(BaseModel):
 
 @app.post("/api/player/reconcile-state")
 async def reconcile_player_state(request: Request):
-    """Reconcile a player's active-round pointer without changing funds.
-
-    A pointer is cleared only when its round is missing, cancelled, or fully
-    paid/refunded without the player remaining in the round. Valid active and
-    still-settling rounds are preserved so a player cannot double-join.
-    """
+    """Reconcile all active stake rounds without changing funds."""
     user_id = _require_player(request)
 
     def _reconcile():
@@ -448,39 +445,50 @@ async def reconcile_player_state(request: Request):
         user_snap = user_ref.get()
         if not user_snap.exists:
             return {"ok": False, "error": "User not found"}
-        user_data = user_snap.to_dict()
-        active_id = user_data.get("active_round_id")
-        if not user_data.get("is_playing") or not active_id:
+        user_data = user_snap.to_dict() or {}
+        active_ids = _active_round_ids(user_data)
+        if not active_ids:
             return {"ok": True, "active": False, "user": user_data}
 
-        round_snap = db.collection("rounds").document(str(active_id)).get()
-        round_data = round_snap.to_dict() if round_snap.exists else None
         player_key = str(user_id)
-        member = bool(round_data and player_key in (round_data.get("players", {}) or {}))
-        status = round_data.get("status") if round_data else None
-        fully_settled = bool(round_data and round_data.get("payout_processed"))
-        clear_stale = (
-            not round_data
-            or status == "cancelled"
-            or (status == "completed" and fully_settled)
-            or not member
-        )
-        if clear_stale:
-            user_ref.update({
-                "is_playing": False,
-                "active_round_id": None,
-                "updated_at": datetime.now(tz=timezone.utc),
-            })
-            user_data["is_playing"] = False
-            user_data["active_round_id"] = None
-            return {"ok": True, "active": False, "cleared": True, "user": user_data}
+        kept_ids = []
+        round_states = {}
+        for active_id in active_ids:
+            round_snap = db.collection("rounds").document(str(active_id)).get()
+            round_data = round_snap.to_dict() if round_snap.exists else None
+            member = bool(round_data and player_key in (round_data.get("players", {}) or {}))
+            status = round_data.get("status") if round_data else None
+            fully_settled = bool(round_data and round_data.get("payout_processed"))
+            clear_stale = (
+                not round_data
+                or status == "cancelled"
+                or (status == "completed" and fully_settled)
+                or not member
+            )
+            if not clear_stale:
+                kept_ids.append(str(active_id))
+                round_states[str(active_id)] = (status, status == "completed" and not fully_settled)
 
+        state = _active_round_state(kept_ids)
+        if (
+            user_data.get("active_round_ids") != state["active_round_ids"]
+            or user_data.get("is_playing") != state["is_playing"]
+            or user_data.get("active_round_id") != state["active_round_id"]
+        ):
+            user_ref.update({**state, "updated_at": datetime.now(tz=timezone.utc)})
+            user_data.update(state)
+
+        if not kept_ids:
+            return {"ok": True, "active": False, "cleared": bool(active_ids), "user": user_data}
+        active_id = kept_ids[-1]
+        status, settling = round_states[active_id]
         return {
             "ok": True,
             "active": True,
-            "active_round_id": str(active_id),
+            "active_round_ids": kept_ids,
+            "active_round_id": active_id,
             "round_status": status,
-            "settling": status == "completed" and not fully_settled,
+            "settling": settling,
             "user": user_data,
         }
 
@@ -1452,8 +1460,6 @@ def _mutate_pending_selection_sync(
         if not user_doc.exists:
             return {"error": "Player account not found"}
         user_data = user_doc.to_dict() or {}
-        if user_data.get('is_playing') and user_data.get('active_round_id') not in (None, round_id):
-            return {"error": "You are already playing in another active round"}
         try:
             wallet = float(user_data.get('play_wallet', 0) or 0)
             stake = float(round_data.get('stake', DEFAULT_STAKE) or 0)
