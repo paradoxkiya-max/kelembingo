@@ -184,11 +184,8 @@ export default function CartelaSelect() {
     if (seconds <= 0) {
       if (selected.length && !confirmStarted.current) { confirmStarted.current = true; void confirmSelection(); }
       else if (!selected.length) navigate("/", { replace: true });
-      return;
     }
-    const timer = window.setInterval(() => setSeconds((value) => value - 1), 1000);
-    return () => window.clearInterval(timer);
-  }, [seconds, selected.length]);
+  }, [navigate, seconds, selected.length]);
 
   useEffect(() => {
     const missing = selected.filter((number) => !cartelas.some((card) => card.number === number) && !previewFetches.current.has(number));
