@@ -10,7 +10,7 @@ import { observeCartelaPool, observeRound, primeRoundSnapshot } from "@/lib/real
 
 const STAKES = [10, 20];
 const MAX_SELECTIONS = 2;
-const SELECTION_SECONDS = 35;
+const SELECTION_SECONDS = 45;
 const CARTELA_POOL: Cartela[] = Array.from({ length: 500 }, (_, index) => ({ number: index + 1 }));
 
 type PoolSnapshot = { taken_cartelas?: number[]; player_count?: number; derash_pool?: number; pending_revision?: number; pending_selections?: Record<string, number[]> };
@@ -46,6 +46,7 @@ export default function CartelaSelect() {
   const [expired, setExpired] = useState(false);
   const [walletPreview, setWalletPreview] = useState<number | null>(null);
   const [committedWallet, setCommittedWallet] = useState<number | null>(null);
+  const [serverClockOffset, setServerClockOffset] = useState(0);
   const [liveDerashPool, setLiveDerashPool] = useState<number | null>(null);
   const confirmStarted = useRef(false);
   const previewFetches = useRef(new Set<number>());
@@ -136,7 +137,7 @@ export default function CartelaSelect() {
       publishSelected(authoritativeSelectedRef.current);
       setExpired(false);
       const deadline = nextRound?.selection_deadline ? new Date(nextRound.selection_deadline).getTime() : 0;
-      if (deadline) setSeconds(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)));
+      if (deadline) setSeconds(Math.max(0, Math.ceil((deadline - (Date.now() + serverClockOffset)) / 1000)));
       if (nextRound?.id) {
         currentRoundId.current = String(nextRound.id);
         unsubscribePool = observeCartelaPool(nextRound.id, (message) => {
@@ -158,6 +159,26 @@ export default function CartelaSelect() {
     }).catch((e) => active && selectionEpoch.current === epoch && setLoadError(e instanceof Error ? e.message : "Unable to load this round")).finally(() => active && selectionEpoch.current === epoch && setLoading(false));
     return () => { active = false; selectionEpoch.current += 1; currentRoundId.current = ""; unsubscribePool?.(); unsubscribeRound?.(); };
   }, [applyPoolSnapshot, navigate, publishSelected, stake, player?.user_id]);
+
+  useEffect(() => {
+    let active = true;
+    const requestStarted = Date.now();
+    void playerApi.time().then(({ iso }) => {
+      const requestFinished = Date.now();
+      const serverNow = new Date(iso).getTime();
+      if (active && Number.isFinite(serverNow)) setServerClockOffset(serverNow - ((requestStarted + requestFinished) / 2));
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [round?.id]);
+
+  useEffect(() => {
+    const deadline = round?.selection_deadline ? new Date(round.selection_deadline).getTime() : 0;
+    if (!deadline || round?.status !== "selecting") return;
+    const sync = () => setSeconds(Math.max(0, Math.ceil((deadline - (Date.now() + serverClockOffset)) / 1000)));
+    sync();
+    const timer = window.setInterval(sync, 250);
+    return () => window.clearInterval(timer);
+  }, [round?.selection_deadline, round?.status, serverClockOffset]);
 
   useEffect(() => {
     if (seconds <= 0) {
