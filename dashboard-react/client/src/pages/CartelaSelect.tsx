@@ -16,6 +16,19 @@ const CARTELA_POOL: Cartela[] = Array.from({ length: 500 }, (_, index) => ({ num
 type PoolSnapshot = { taken_cartelas?: number[]; player_count?: number; derash_pool?: number; pending_revision?: number; pending_selections?: Record<string, number[]> };
 type SelectionIntent = { id: string; cartelaNumber: number; selecting: boolean };
 
+type PoolStateLike = Pick<PoolSnapshot, "taken_cartelas" | "pending_revision" | "pending_selections">;
+
+function poolStateFingerprint(snapshot: PoolStateLike, revision = Math.max(0, Number(snapshot.pending_revision) || 0)) {
+  const pending = Object.entries(snapshot.pending_selections || {})
+    .map(([userId, numbers]) => [String(userId), normalizeCartelas(numbers)] as const)
+    .sort(([left], [right]) => left.localeCompare(right));
+  return JSON.stringify({
+    revision,
+    taken_cartelas: (snapshot.taken_cartelas || []).map(Number).sort((a, b) => a - b),
+    pending_selections: pending,
+  });
+}
+
 function replayIntents(authoritative: number[], intents: SelectionIntent[]) {
   const next = new Set(normalizeCartelas(authoritative));
   for (const intent of intents) intent.selecting ? next.add(intent.cartelaNumber) : next.delete(intent.cartelaNumber);
@@ -95,11 +108,7 @@ export default function CartelaSelect() {
     const revision = Math.max(0, Number(snapshot.pending_revision) || 0);
     if ((!revision && pendingRevision.current > 0) || (revision && revision < pendingRevision.current)) return null;
     const nextPending = snapshot.pending_selections || {};
-    const fingerprint = JSON.stringify({
-      revision,
-      taken_cartelas: (snapshot.taken_cartelas || []).map(Number).sort((a, b) => a - b),
-      pending_selections: nextPending,
-    });
+    const fingerprint = poolStateFingerprint(snapshot, revision);
     // A duplicate revision must describe the same committed transaction. If
     // it does not, the event bridge delivered an older conflicting snapshot;
     // applying it would resurrect a deselected card or make it appear taken.
@@ -142,9 +151,12 @@ export default function CartelaSelect() {
     selectionQueue.current = Promise.resolve();
     selectionIntents.current = [];
     currentRoundId.current = "";
-    playerApi.activeRounds(stake).then((activeResponse) => {
+    // createRound is atomic: it returns the existing active round or creates
+    // the next one. One request removes the post-round monitor gap and makes
+    // the stake-to-cartela transition faster than lookup-then-create.
+    playerApi.createRound(stake).then((createResponse) => {
       if (!active || selectionEpoch.current !== epoch) return;
-      const nextRound = activeResponse.round || null;
+      const nextRound = createResponse.round || null;
       if (!nextRound) {
         setRound(null);
         setCartelas([]);
@@ -152,7 +164,7 @@ export default function CartelaSelect() {
         setPending({});
         publishSelected([]);
         setExpired(false);
-        setLoadError("No active round is available yet. Please try again.");
+        setLoadError("Unable to start the next round. Please try again.");
         return;
       }
       setCartelas([]);
@@ -178,14 +190,25 @@ export default function CartelaSelect() {
         });
         const applyRoundSnapshot = (latest: Round) => {
           if (!active || selectionEpoch.current !== epoch || String(latest.id || nextRound.id) !== String(nextRound.id)) return;
+          const currentRevision = pendingRevision.current;
+          const nextRevision = Math.max(0, Number(latest.pending_revision) || 0);
+          const hasPoolState = latest.pending_selections !== undefined || latest.taken_cartelas !== undefined;
+          const nextFingerprint = hasPoolState ? poolStateFingerprint(latest, nextRevision) : "";
+          // A full round snapshot can arrive after a newer cartela_pool event.
+          // Never let it roll the client back to an older revision or replace a
+          // same-revision pool with conflicting contents.
+          if (hasPoolState && nextRevision < currentRevision) return;
+          if (hasPoolState && nextRevision === currentRevision && currentRevision > 0 && lastPoolSnapshotFingerprint.current && nextFingerprint !== lastPoolSnapshotFingerprint.current) return;
           setRound(latest);
-          pendingRevision.current = Math.max(0, Number(latest.pending_revision) || 0);
-          lastPoolSnapshotFingerprint.current = "";
-          const authoritative = normalizeCartelas(latest.pending_selections?.[String(player?.user_id || "")] || []);
-          authoritativeSelectedRef.current = authoritative;
-          setTaken(new Set((latest.taken_cartelas || []).map(Number)));
-          setPending(latest.pending_selections || {});
-          publishSelected(replayIntents(authoritative, selectionIntents.current));
+          if (hasPoolState) {
+            pendingRevision.current = nextRevision;
+            lastPoolSnapshotFingerprint.current = nextFingerprint;
+            const authoritative = normalizeCartelas(latest.pending_selections?.[String(player?.user_id || "")] || []);
+            authoritativeSelectedRef.current = authoritative;
+            setTaken(new Set((latest.taken_cartelas || []).map(Number)));
+            setPending(latest.pending_selections || {});
+            publishSelected(replayIntents(authoritative, selectionIntents.current));
+          }
           if (latest.status === "playing") { const targetId = String(latest.id || nextRound.id); primeRoundSnapshot(targetId, latest); publishSelected([]); setWalletPreview(null); setExpired(true); navigate(`/game?round=${encodeURIComponent(targetId)}`, { replace: true }); }
           else if (latest.status === "completed") navigate("/", { replace: true });
         };

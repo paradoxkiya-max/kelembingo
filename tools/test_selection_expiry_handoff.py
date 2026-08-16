@@ -11,6 +11,8 @@ admin = (ROOT / "dashboard-react/client/src/pages/admin/AdminDashboard.tsx").rea
 assert "async def _finalize_pending_selections" in gateway
 assert "await _finalize_pending_selections(round_id, data)" in gateway
 assert "async def _start_playing_round" in gateway
+assert "async def _provision_next_round" in gateway
+assert "await _provision_next_round" in gateway
 assert "timedelta(seconds=5)" not in gateway[gateway.index("async def _game_loop"):gateway.index("# Now call numbers every 5 seconds")]
 assert "_start_game_loop(round_id)" in gateway[gateway.index("async def join_round"):gateway.index("@app.post(\"/api/rounds/{round_id}/select\")")]
 
@@ -25,7 +27,8 @@ assert "primeRoundSnapshot" in select and "primeRoundSnapshot" in realtime
 assert "const serverRound = await playerApi.round" not in select
 assert "cartelaCache" in client
 assert '"SYNCING…"' not in select and '"GO"' in select
-assert "observeRealtimeReconnect" in select and "No active round is available yet. Please try again." in select
+assert "observeRealtimeReconnect" in select and "Unable to start the next round. Please try again." in select
+assert "playerApi.createRound(stake)" in select
 assert "committedWallet" in select and "setCommittedWallet(balance)" in select
 assert "authoritativeSelectedRef" in select and "applyPoolSnapshot" in select
 assert "const pendingSelection = selectedRef.current" in select

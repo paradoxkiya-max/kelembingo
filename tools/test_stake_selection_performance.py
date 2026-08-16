@@ -11,7 +11,8 @@ assert 'lazy(() => import("@/pages/CartelaSelect"))' in app
 assert 'CARTELA_POOL' in card_select
 assert 'playerApi.cartelas' not in card_select
 assert 'playerApi.cartela(number)' in card_select
-assert 'playerApi.activeRounds' in card_select
+assert 'playerApi.createRound(stake)' in card_select
+assert 'playerApi.activeRounds' not in card_select
 assert 'playerApi.stats()' in player_context
 assert 'setInterval(() => void playerApi.stats().then(setStats).catch(() => undefined), 30000)' in player_context
 assert '"/api/public/stats"' in gateway

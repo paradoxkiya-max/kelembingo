@@ -219,7 +219,7 @@ export default function GameBoard() {
 
   const isSpectator = !cardsLoading && cartelas.length === 0;
   const roundStatusLabel = round.status === "completed" ? "Round complete" : round.status === "selecting" ? `Selection ${countdown > 0 ? `${countdown}s` : "Go"}` : isSpectator ? "Spectating live" : "Live game";
-  const displayTimer = round.status === "selecting" ? (countdown > 0 ? `${countdown}s` : "Go") : timer > 0 ? `${timer}s` : "Syncing…";
+  const displayTimer = round.status === "selecting" ? (countdown > 0 ? `${countdown}s` : "Go") : timer > 0 ? `${timer}s` : "Go";
   const sharedDerashPool = roundDerashPool(round);
 
   return <div className="flex min-h-[calc(100vh-56px)] flex-col bg-[linear-gradient(180deg,#0D1117_0%,#0A0F18_50%,#111827_100%)] px-2 py-1">

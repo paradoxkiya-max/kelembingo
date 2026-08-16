@@ -22,7 +22,18 @@ mutation = api[mutation_start:mutation_end]
 assert "transaction.update(round_ref" in mutation
 assert "pending_revision" in mutation
 assert "lastPoolSnapshotFingerprint" in selection_test or "lastPoolSnapshotFingerprint" in (ROOT / "dashboard-react/client/src/pages/CartelaSelect.tsx").read_text()
-assert "fingerprint !== lastPoolSnapshotFingerprint.current" in (ROOT / "dashboard-react/client/src/pages/CartelaSelect.tsx").read_text()
+cartela_source = (ROOT / "dashboard-react/client/src/pages/CartelaSelect.tsx").read_text()
+assert "fingerprint !== lastPoolSnapshotFingerprint.current" in cartela_source
+assert "nextRevision < currentRevision" in cartela_source
+assert "nextFingerprint !== lastPoolSnapshotFingerprint.current" in cartela_source
+
+# Model the reported ordering: revision 13 releases card 12, then an older
+# revision 12 full snapshot arrives. The older snapshot must be rejected.
+newer = {"revision": 13, "taken": [], "pending": {"77": [35]}}
+older = {"revision": 12, "taken": [12], "pending": {"77": [12, 35]}}
+current_revision = newer["revision"]
+assert older["revision"] < current_revision
+assert older["revision"] < current_revision  # reducer must keep revision 13
 assert "sess.commit()" in (ROOT / "firestore_db.py").read_text()
 assert "persisted_first[\"pending_selections\"][\"77\"] == [12]" in selection_test
 assert "persisted_after_first_release[\"pending_selections\"][\"77\"] == [35]" in selection_test

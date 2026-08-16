@@ -763,6 +763,25 @@ async def _start_playing_round(round_id: str, round_data: dict) -> bool:
     return True
 
 
+async def _provision_next_round(stake: int = DEFAULT_STAKE):
+    """Create the next selecting round immediately after completion.
+
+    The five-second monitor remains a recovery mechanism, while normal round
+    turnover is event-driven so players do not wait for a monitor tick.
+    """
+    try:
+        next_round = await engine.create_round(stake=stake)
+        next_id = next_round.get('id') if isinstance(next_round, dict) else None
+        if next_id:
+            _start_game_loop(next_id)
+            await broadcast_event('rounds', next_id)
+            logger.info('[GameEngine] Next round ready immediately: %s stake=%s', next_id, stake)
+        return next_round
+    except Exception:
+        logger.exception('[GameEngine] Failed to provision next round for stake=%s', stake)
+        return None
+
+
 async def _game_loop(round_id: str):
     """Background task: wait for selection deadline, then start if players exist."""
     try:
@@ -773,7 +792,10 @@ async def _game_loop(round_id: str):
             data = round_doc.to_dict()
             status = data.get('status')
 
-            if status == 'completed' or status is None:
+            if status == 'completed':
+                await _provision_next_round(int(data.get('stake', DEFAULT_STAKE) or DEFAULT_STAKE))
+                return
+            if status is None:
                 return
 
             if status == 'playing':
@@ -957,6 +979,7 @@ async def _game_loop(round_id: str):
                         logger.error(f"[GameLoop] Error distributing prizes: {e}")
                 # payout_processed already set atomically inside end_round
                 await broadcast_event('rounds', round_id)
+                await _provision_next_round(int(rd_after.get('stake', DEFAULT_STAKE) or DEFAULT_STAKE))
                 logger.info(
                     f"[GameLoop] ROUND COMPLETE {round_id}: "
                     f"winners={winners} calls={len(rd_after.get('called_numbers', []) or [])}"
@@ -1035,6 +1058,7 @@ async def _game_loop(round_id: str):
                     try: await broadcast_event('users', str(uid))
                     except: pass
                 # payout_processed already set atomically inside end_round
+                await _provision_next_round(int(rd_after.get('stake', DEFAULT_STAKE) or DEFAULT_STAKE))
                 return
 
             if completion_reason == 'no_winner_all_numbers':
@@ -1057,6 +1081,7 @@ async def _game_loop(round_id: str):
                 else:
                     logger.error(f"[GameLoop] No-winner refund failed for {round_id}: {result}")
                 await broadcast_event('rounds', round_id)
+                await _provision_next_round(int(rd_after.get('stake', DEFAULT_STAKE) or DEFAULT_STAKE))
                 return
 
     except asyncio.CancelledError:

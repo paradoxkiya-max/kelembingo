@@ -11,7 +11,7 @@ context = (ROOT / "dashboard-react/client/src/contexts/PlayerContext.tsx").read_
 round_engine = (ROOT / "game/round_engine.py").read_text()
 
 assert 'selectionPath' in game
-assert '"Go"' in game and '"Syncing…"' in game and '"Starting…"' not in game
+assert '"Go"' in game and '"Syncing…"' not in game and '"STARTING…"' in select
 assert "window.setInterval(syncClock, 1000)" in game
 assert "Spectating mode" in game
 assert "playerApi.cartela(number)" in game
@@ -22,7 +22,7 @@ assert 'onReturn={() => navigate(selectionPath, { replace: true })}' in game
 assert 'if (!roundId) { navigate("/", { replace: true }); return; }' in game
 assert 'previous.status === "completed"' in game and 'previous.winning_cartela' in game
 assert 'round?.status !== "completed"' in game and 'playerApi.round(roundId)' in game
-assert 'No active round is available yet. Please try again.' in select and 'setLoadAttempt' in select
+assert 'Unable to start the next round. Please try again.' in select and 'setLoadAttempt' in select
 assert 'observeRealtimeReconnect' in select and 'playerApi.round(String(nextRound.id))' in select
 assert 'if (!winnerId || !Number.isInteger(cartelaNumber) || cartelaNumber < 1) {\n      navigate("/", { replace: true });' in game
 assert "This round is complete. The next round is open from the Game tab." not in game
