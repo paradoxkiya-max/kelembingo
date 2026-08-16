@@ -17,6 +17,10 @@ assert 'playerApi.stats()' in player_context
 assert 'setInterval(() => void playerApi.stats().then(setStats).catch(() => undefined), 30000)' in player_context
 assert '"/api/public/stats"' in gateway
 assert 'Promise.all' in card_select
+assert '_ACTIVE_ROUND_CACHE_TTL = 1.5' in admin_api
+assert '_cached_active_round(stake)' in admin_api
+assert 'setLoading(false);' in card_select
+assert 'setLoading(false);\n      setLiveDerashPool' in card_select
 assert '@app.get("/api/public/stats")' in admin_api
 assert "jsonb_extract_path_text(CAST(data AS JSONB), 'status')" in admin_api
 

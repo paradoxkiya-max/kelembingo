@@ -20,6 +20,7 @@ class RoomManager {
   private ready = false;
   private connectedOnce = false;
   private reconnectListeners = new Set<() => void>();
+  private connectionListeners = new Set<(connected: boolean) => void>();
 
   private connect() {
     if (this.socket) return this.socket;
@@ -29,10 +30,11 @@ class RoomManager {
         const reconnecting = this.connectedOnce;
         this.connectedOnce = true;
         this.ready = true;
+        Array.from(this.connectionListeners).forEach((listener) => listener(true));
         Array.from(this.rooms.values()).forEach((room) => this.socket?.emit("subscribe", room.data));
         if (reconnecting) Array.from(this.reconnectListeners).forEach((listener) => listener());
       });
-      this.socket.on("disconnect", () => { this.ready = false; });
+      this.socket.on("disconnect", () => { this.ready = false; Array.from(this.connectionListeners).forEach((listener) => listener(false)); });
       this.socket.on("snapshot", (message: SnapshotMessage) => this.dispatch("snapshot", message));
       this.socket.on("query_snapshot", (message: SnapshotMessage) => this.dispatch("query_snapshot", message));
       this.socket.on("cartela_pool", (message: SnapshotMessage) => this.dispatch("cartela_pool", message));
@@ -121,6 +123,13 @@ class RoomManager {
     return () => this.reconnectListeners.delete(listener);
   }
 
+  subscribeConnection(listener: (connected: boolean) => void) {
+    this.connectionListeners.add(listener);
+    const socket = this.connect();
+    listener(Boolean(socket?.connected));
+    return () => this.connectionListeners.delete(listener);
+  }
+
   subscribeCollection(collection: string, listener: (message: SnapshotMessage) => void) {
     const data: Subscription = { collection };
     const adminToken = window.localStorage.getItem("kelembingo.adminToken"); if (adminToken) data.admin_token = adminToken;
@@ -167,6 +176,10 @@ export function observeCartelaPool(roundId: string, listener: (message: Snapshot
 
 export function observeRealtimeReconnect(listener: () => void) {
   return roomManager.subscribeReconnect(listener);
+}
+
+export function observeRealtimeConnection(listener: (connected: boolean) => void) {
+  return roomManager.subscribeConnection(listener);
 }
 
 export function observePlayer(userId: string, listener: (player: Player | null) => void) {

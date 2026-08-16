@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useSearch } from "wouter";
 import { usePlayer } from "@/contexts/PlayerContext";
 import { playerApi, type Cartela, type Round } from "@/lib/gateway";
-import { observeRound } from "@/lib/realtime";
+import { observeRealtimeConnection, observeRound } from "@/lib/realtime";
 import { etb } from "@/lib/format";
 import { Switch } from "@/components/ui/switch";
 import { WinnerAnnouncement, type WinnerAnnouncementData } from "@/components/player/WinnerAnnouncement";
@@ -152,20 +152,31 @@ export default function GameBoard() {
     return () => window.clearInterval(interval);
   }, [round?.next_number_at, round?.selection_deadline, round?.status, serverClockOffset]);
 
-  // Realtime is the fast path, but a short REST resync repairs a missed or
-  // out-of-order snapshot after a reconnect, background-tab pause, or proxy
-  // delay. This keeps the display aligned with the authoritative round clock.
+  // Realtime is the fast path. REST recovery is intentionally enabled only
+  // while Socket.IO is disconnected, matching the supplied UI and avoiding a
+  // second active stream competing with durable round snapshots.
   useEffect(() => {
-    if (!roundId || (round?.status !== "playing" && round?.status !== "completed")) return;
+    if (!roundId) return;
     let active = true;
+    let recoveryTimer: number | null = null;
     const refreshRound = () => {
       void playerApi.round(roundId)
         .then(({ round: latest }) => { if (active) applyRound(latest); })
         .catch(() => undefined);
     };
-    const interval = window.setInterval(refreshRound, 10000);
-    return () => { active = false; window.clearInterval(interval); };
-  }, [applyRound, round?.status, roundId]);
+    const setRecovery = (connected: boolean) => {
+      if (connected) {
+        if (recoveryTimer !== null) { window.clearInterval(recoveryTimer); recoveryTimer = null; }
+        return;
+      }
+      if (recoveryTimer === null) {
+        refreshRound();
+        recoveryTimer = window.setInterval(refreshRound, 3000);
+      }
+    };
+    const unsubscribe = observeRealtimeConnection(setRecovery);
+    return () => { active = false; unsubscribe(); if (recoveryTimer !== null) window.clearInterval(recoveryTimer); };
+  }, [applyRound, roundId]);
 
   useEffect(() => {
     if (audioWarmupDone.current || round?.status !== "playing" || timer > 4 || timer < 1) return;

@@ -15,7 +15,7 @@ checks = {
     "playback_deduplication": "previous !== null" in source and "calledNumbers.length > previous.length" in source,
     "go_transition_label": '"Syncing…"' not in source and '"Go"' in source,
     "stale_deadline_guard": "nextCalls === previousCalls" in source and "nextDeadline < previousDeadline" in source,
-    "periodic_round_resync": "playerApi.round(roundId)" in source and "setInterval(refreshRound, 10000)" in source,
+    "disconnect_only_round_resync": "observeRealtimeConnection" in source and "setInterval(refreshRound, 3000)" in source and "setInterval(refreshRound, 10000)" not in source,
     "four_second_client_warmup": "timer > 4 || timer < 1" in source and "warmNumberAudio" in source,
     "strict_server_five_seconds": "NUMBER_CALL_INTERVAL = 5" in gateway and "timedelta(seconds=5)" in settlement,
 }

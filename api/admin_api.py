@@ -601,6 +601,37 @@ def get_server_time():
 # ─── Background game loop state ───
 _active_game_tasks = {}  # round_id -> asyncio.Task
 _user_operation_locks = {}  # user_id -> asyncio.Lock for wallet operations in this process
+_ACTIVE_ROUND_CACHE_TTL = 1.5
+_active_round_cache = {}  # stake -> {"at": monotonic timestamp, "round": dict}
+
+
+def _cache_active_round(round_id: str, round_data: Optional[dict]):
+    if not isinstance(round_data, dict):
+        return
+    stake = int(round_data.get("stake", DEFAULT_STAKE) or DEFAULT_STAKE)
+    status = round_data.get("status")
+    if status not in ("selecting", "playing"):
+        cached = _active_round_cache.get(stake)
+        if cached and str(cached.get("round", {}).get("id")) == str(round_id):
+            _active_round_cache.pop(stake, None)
+        return
+    _active_round_cache[stake] = {
+        "at": time.monotonic(),
+        "round": {"id": str(round_id), **round_data},
+    }
+
+
+def _cached_active_round(stake: int) -> Optional[dict]:
+    cached = _active_round_cache.get(int(stake))
+    if not cached or time.monotonic() - float(cached.get("at", 0)) > _ACTIVE_ROUND_CACHE_TTL:
+        if cached:
+            _active_round_cache.pop(int(stake), None)
+        return None
+    round_data = cached.get("round") or {}
+    if round_data.get("status") == "selecting" and _selection_deadline_expired(round_data):
+        _active_round_cache.pop(int(stake), None)
+        return None
+    return dict(round_data)
 
 # Additive reference-inspired room protocol. Existing REST select/unselect
 # remains the durable fallback; this layer only serializes room intent delivery
@@ -808,6 +839,7 @@ async def _provision_next_round(stake: int = DEFAULT_STAKE):
         next_round = await engine.create_round(stake=stake)
         next_id = next_round.get('id') if isinstance(next_round, dict) else None
         if next_id:
+            _cache_active_round(str(next_id), next_round)
             _start_game_loop(next_id)
             await broadcast_event('rounds', next_id)
             logger.info('[GameEngine] Next round ready immediately: %s stake=%s', next_id, stake)
@@ -825,6 +857,7 @@ async def _game_loop(round_id: str):
             if not round_doc.exists:
                 return
             data = round_doc.to_dict()
+            _cache_active_round(round_id, data)
             status = data.get('status')
 
             if status == 'completed':
@@ -1327,17 +1360,24 @@ async def get_cartela(number: int):
 @app.get("/api/rounds/active")
 async def get_active_round(stake: int = FastAPIQuery(default=DEFAULT_STAKE)):
     """Get the current active round for the requested stake."""
+    round_data = _cached_active_round(stake)
+    if round_data:
+        return {"round": round_data}
     round_data = await engine.get_active_round(stake=stake)
     if not round_data:
         return {"round": None}
+    _cache_active_round(str(round_data.get("id", "")), round_data)
     return {"round": round_data}
 
 
 @app.post("/api/rounds/create")
 async def create_round(stake: int = FastAPIQuery(default=DEFAULT_STAKE)):
     """Create a new round (or return existing active one) for a given stake."""
-    result = await engine.create_round(stake=stake)
+    result = _cached_active_round(stake)
+    if not result:
+        result = await engine.create_round(stake=stake)
     if 'id' in result:
+        _cache_active_round(str(result['id']), result)
         _start_game_loop(result['id'])
     return {"round": result}
 
@@ -3148,6 +3188,8 @@ async def broadcast_event(collection: str, doc_id: str):
         while len(_last_broadcast_fingerprints) > _BROADCAST_FINGERPRINT_LIMIT:
             _last_broadcast_fingerprints.pop(next(iter(_last_broadcast_fingerprints)))
 
+        if collection == "rounds":
+            _cache_active_round(str(doc_id), snapshot_data if snap.exists else None)
         payload = {
             "type": "snapshot",
             "collection": collection,

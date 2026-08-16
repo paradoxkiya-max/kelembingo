@@ -11,5 +11,9 @@ assert '[contain:layout_style]' in card_select
 assert 'aria-label={`Cartela' in card_select
 assert 'active:scale-[0.92]' in card_select
 assert 'overflow-y-auto' in card_select
+assert 'setLoading(false);' in card_select
+assert '{!round ? (loading ?' in card_select
+assert 'Loading cartelas' not in card_select
+assert 'Finding game…' in card_select
 
 print('cartela grid performance regression check: PASS')

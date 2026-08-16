@@ -21,7 +21,7 @@ assert 'if (winnerAnnouncement && returnCountdown === 0) navigate(selectionPath,
 assert 'onReturn={() => navigate(selectionPath, { replace: true })}' in game
 assert 'if (!roundId) { navigate("/", { replace: true }); return; }' in game
 assert 'previous.status === "completed"' in game and 'previous.winning_cartela' in game
-assert 'round?.status !== "completed"' in game and 'playerApi.round(roundId)' in game
+assert 'observeRealtimeConnection' in game and 'playerApi.round(roundId)' in game and 'setInterval(refreshRound, 3000)' in game
 assert 'Unable to start the next round. Please try again.' in select and 'setLoadAttempt' in select
 assert 'observeRealtimeReconnect' in select and 'playerApi.round(String(nextRound.id))' in select
 assert 'if (!winnerId || !Number.isInteger(cartelaNumber) || cartelaNumber < 1) {\n      navigate("/", { replace: true });' in game
