@@ -345,13 +345,18 @@ export default function CartelaSelect() {
       } catch (e) {
         if (selectionEpoch.current !== epoch || currentRoundId.current !== roundId) return;
         const message = e instanceof Error ? e.message : "Selection failed";
-        if (/already joined|opening the game board/i.test(message)) {
+        if (/already joined|opening the game board|selection window closed/i.test(message)) {
           const latest = await playerApi.round(roundId).then((response) => response.round).catch(() => null);
           if (latest?.id) {
             const targetId = String(latest.id);
+            const joined = normalizeCartelas(latest.players?.[userId]?.cartelas || []);
             primeRoundSnapshot(targetId, latest);
             setExpired(true);
-            navigate(`/game?round=${encodeURIComponent(targetId)}`, { replace: true });
+            if (latest.status === "playing" || joined.length > 0) {
+              navigate(`/game?round=${encodeURIComponent(targetId)}`, { replace: true });
+            } else if (latest.status === "completed") {
+              navigate("/", { replace: true });
+            }
             return;
           }
         }

@@ -44,6 +44,28 @@ def _read_user_sync(user_id: int):
     return snap.to_dict() if snap.exists else None
 
 
+def _selection_deadline_expired(round_data: dict, now: Optional[datetime] = None) -> bool:
+    """Return whether a selecting round has passed its authoritative deadline."""
+    raw_deadline = round_data.get('selection_deadline') if isinstance(round_data, dict) else None
+    if not raw_deadline:
+        return False
+    if isinstance(raw_deadline, datetime):
+        deadline = raw_deadline
+    elif isinstance(raw_deadline, str):
+        try:
+            deadline = datetime.fromisoformat(raw_deadline.replace('Z', '+00:00'))
+        except ValueError:
+            return False
+    else:
+        return False
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    current = now or datetime.now(tz=timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return current >= deadline
+
+
 ALLOWED_ORIGINS = [
     "*",
     "https://kelembingo-frontend-i8yy.onrender.com",
@@ -1312,10 +1334,23 @@ def _mutate_pending_selection_sync(
         if not snap.exists:
             return {"error": "Round not found"}
         round_data = snap.to_dict()
-        if round_data.get('status') not in ('selecting', None):
-            return {"error": "Round not in selecting phase"}
         if not 1 <= int(cartela_number) <= TOTAL_CARTELAS:
             return {"error": "Invalid cartela number"}
+
+        joined_player = (round_data.get('players', {}) or {}).get(user_id, {})
+        joined_cartelas = {
+            int(number) for number in (joined_player.get('cartelas', []) or [])
+            if str(number).isdigit() and 1 <= int(number) <= TOTAL_CARTELAS
+        }
+        if joined_cartelas:
+            return {
+                "error": "Cartela already joined; opening the game board",
+                "joined_cartelas": sorted(joined_cartelas),
+            }
+        if round_data.get('status') not in ('selecting', None):
+            return {"error": "Round not in selecting phase"}
+        if _selection_deadline_expired(round_data):
+            return {"error": "Selection window closed; waiting for round transition"}
 
         user_ref = db.collection('users').document(user_id)
         user_doc = transaction.get(user_ref)
@@ -1339,16 +1374,6 @@ def _mutate_pending_selection_sync(
         } if isinstance(raw_pending, dict) else {}
         selected = [int(number) for number in pending.get(user_id, []) if str(number).isdigit()]
         selected = list(dict.fromkeys(number for number in selected if 1 <= number <= TOTAL_CARTELAS))
-        joined_player = (round_data.get('players', {}) or {}).get(user_id, {})
-        joined_cartelas = {
-            int(number) for number in (joined_player.get('cartelas', []) or [])
-            if str(number).isdigit() and 1 <= int(number) <= TOTAL_CARTELAS
-        }
-        if joined_cartelas:
-            return {
-                "error": "Cartela already joined; opening the game board",
-                "joined_cartelas": sorted(joined_cartelas),
-            }
         raw_reservations = round_data.get('pending_reservations', {})
         reservations = {
             str(uid): list(numbers) if isinstance(numbers, list) else []
