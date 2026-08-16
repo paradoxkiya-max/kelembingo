@@ -197,7 +197,7 @@ export default function CartelaSelect() {
     selectionIntents.current.push(intent);
     publishSelected(isSelected ? current.filter((item) => item !== number) : [...current, number]);
     setError("");
-    setLiveDerashPool(Math.round(Math.max(0, sharedCartelaCount + (isSelected ? -1 : 1)) * stake * 0.80 * 100) / 100);
+    setLiveDerashPool((previous) => Math.round(Math.max(0, (previous ?? sharedDerashPool) + (isSelected ? -stake * 0.80 : stake * 0.80)) * 100) / 100);
     setWalletPreview((preview) => Math.max(0, (preview ?? committedWallet ?? wallet) + (isSelected ? stake : -stake)));
     const execute = async () => {
       try {
