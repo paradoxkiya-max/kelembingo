@@ -36,3 +36,8 @@
 - [x] Eliminate Derash pool rollback while two cartela selection intents are queued
 - [x] Rebalance phase-one safe calls so multiple cartelas make credible progress without early Bingo
 - [x] Validate Derash stability and 15–30 one-winner distribution after the changes
+- [x] Confirm the latest PR #50 commit has green GitHub CI
+- [x] Merge PR #50 into main and delete the feature branch
+- [x] Run an end-to-end live-style game-loop test covering selection, Derash, timing, winner, payout, and terminal state
+- [x] Reproduce and fix stale cartelas that remain taken or reappear selected after select–deselect–select
+- [x] Add regression coverage for replaying selection intents against out-of-order authoritative snapshots

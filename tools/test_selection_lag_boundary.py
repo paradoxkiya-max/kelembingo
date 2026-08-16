@@ -18,6 +18,7 @@ assert "window.setInterval(sync, 250)" in source
 assert "(Date.now() + serverClockOffset)" in source
 assert "selectionIntents.current" in source
 assert "pending_revision" in source
+assert "revision <= pendingRevision.current" in source
 
 @dataclass(frozen=True)
 class Intent:
@@ -62,6 +63,10 @@ current_revision = 13
 stale_revision = 12
 assert stale_revision < current_revision
 assert stale_revision < current_revision  # stale snapshot must be rejected
+# The route response may arrive after its matching websocket pool snapshot.
+# Equal revisions are duplicate observations and must not replay retired intents.
+duplicate_revision = 13
+assert duplicate_revision <= current_revision
 
 # Reloading during the delayed queue uses the same deadline, never a fresh
 # local 45-second window.
