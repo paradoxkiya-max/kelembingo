@@ -20,7 +20,7 @@ from config import db, BOT_TOKEN
 from firestore_db import MockFirestoreClient, SessionLocal, SystemEvent, FieldFilter, Increment, ArrayUnion, engine as db_engine, run_idempotent
 from startup_state import is_database_ready
 
-from game.round_engine import RoundEngine, DEFAULT_STAKE, VALID_STAKES, SELECTION_DURATION, GAME_LENGTH_RANGE, DERASH_RATIO, MAX_CARTELAS_PER_PLAYER, TOTAL_CARTELAS, _parse_dt, _grid_next_number_at
+from game.round_engine import RoundEngine, DEFAULT_STAKE, VALID_STAKES, SELECTION_DURATION, GAME_LENGTH_RANGE, DERASH_RATIO, MAX_CARTELAS_PER_PLAYER, TOTAL_CARTELAS, BINGO_NUMBERS, _parse_dt, _grid_next_number_at
 from handlers.user_manager import UserManager
 from handlers.bot_content import get_bot_text, get_config_value
 from datetime import datetime, date, timedelta, timezone
@@ -145,7 +145,9 @@ socket_app = CORSASGIMiddleware(_raw_socket_app, ALLOWED_ORIGINS, ALLOWED_ORIGIN
 
 engine = RoundEngine(db)
 user_manager = UserManager(db)
-MAX_SMART_CALLS = GAME_LENGTH_RANGE[1]
+# An unbiased draw must be allowed to reach any valid Bingo pattern. Ending at
+# 30 calls caused valid rounds to refund before a winner could appear.
+MAX_SMART_CALLS = len(BINGO_NUMBERS)
 
 # ─── Auth (C1) ───
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "paradox")
@@ -969,10 +971,16 @@ async def _game_loop(round_id: str):
             completion_reason = None
 
             if winner_entries:
-                chosen_winner = await asyncio.to_thread(engine.choose_single_winner, winner_entries, players)
+                chosen_winner = await asyncio.to_thread(
+                    engine.choose_single_winner,
+                    winner_entries,
+                    players,
+                    round_id,
+                    len(called_now),
+                )
                 completion_reason = 'smart_single_winner' if len(winner_entries) == 1 else 'smart_tie_break_single_winner'
             elif len(called_now) >= MAX_SMART_CALLS:
-                completion_reason = 'no_winner_max_30'
+                completion_reason = 'no_winner_all_numbers'
 
             if chosen_winner:
                 winner_id = str(chosen_winner.get('user_id'))
@@ -1009,7 +1017,7 @@ async def _game_loop(round_id: str):
                 # payout_processed already set atomically inside end_round
                 return
 
-            if completion_reason == 'no_winner_max_30':
+            if completion_reason == 'no_winner_all_numbers':
                 from settlement import refund_no_winner
                 logger.info(
                     f"[GameLoop] No real winner for {round_id} after "
@@ -1023,7 +1031,7 @@ async def _game_loop(round_id: str):
                 ))
                 if result.get('ok'):
                     logger.info(
-                        f"[GameLoop] {round_id}: no_winner_max_30 — "
+                        f"[GameLoop] {round_id}: no_winner_all_numbers — "
                         f"refunded {result.get('amount', 0)} ETB to players"
                     )
                 else:

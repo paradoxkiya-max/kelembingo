@@ -139,5 +139,22 @@ round_source = (ROOT / "game" / "round_engine.py").read_text()
 assert "round-specific unbiased permutation" in round_source
 assert "hmac.new" in round_source
 assert "target_winner" not in round_source.split("def _call_number_sync", 1)[1].split("def get_cartela_patterns", 1)[0]
+assert "MAX_SMART_CALLS = len(BINGO_NUMBERS)" in (ROOT / "api" / "admin_api.py").read_text()
+assert "winner:{round_id}:{int(call_count or 0)}" in round_source
+
+# A simultaneous hit must not always go to the earliest joiner when the
+# authoritative round context is available.
+players = {
+    "1": {"joined_at": "2026-01-01T00:00:00+00:00"},
+    "2": {"joined_at": "2026-01-01T00:00:01+00:00"},
+}
+candidates = [
+    {"user_id": "1", "cartela_number": 4},
+    {"user_id": "2", "cartela_number": 9},
+]
+chosen = engine.choose_single_winner(candidates, players, "round-tie", 22)
+assert chosen in candidates
+assert chosen == engine.choose_single_winner(candidates, players, "round-tie", 22)
+assert engine.choose_single_winner(candidates, players) == candidates[0]
 
 print("round-engine lifecycle regression check: PASS")
