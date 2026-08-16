@@ -73,6 +73,7 @@ export default function CartelaSelect() {
   const selectionQueue = useRef<Promise<void>>(Promise.resolve());
   const selectionEpoch = useRef(0);
   const currentRoundId = useRef("");
+  const deadlineHandoff = useRef(false);
 
   const wallet = walletValue(player?.play_wallet);
   const displayedWallet = walletPreview ?? committedWallet ?? wallet;
@@ -103,6 +104,23 @@ export default function CartelaSelect() {
     setSelected((previous) => previous.length === normalized.length && previous.every((number, index) => number === normalized[index]) ? previous : normalized);
     return normalized;
   }, []);
+
+  const restartSelection = useCallback(() => {
+    if (deadlineHandoff.current) return;
+    deadlineHandoff.current = true;
+    setBusy(false);
+    setExpired(false);
+    setLoading(true);
+    setLoadError("");
+    setError("");
+    setRound(null);
+    setTaken(new Set());
+    setPending({});
+    setLiveDerashPool(null);
+    setWalletPreview(null);
+    publishSelected([]);
+    setLoadAttempt((value) => value + 1);
+  }, [publishSelected]);
 
   const applyPoolSnapshot = useCallback((snapshot: PoolSnapshot) => {
     const revision = Math.max(0, Number(snapshot.pending_revision) || 0);
@@ -170,6 +188,7 @@ export default function CartelaSelect() {
       setCartelas([]);
       previewFetches.current.clear();
       confirmStarted.current = false;
+      deadlineHandoff.current = false;
       setRound(nextRound);
       setLiveDerashPool(null);
       setCommittedWallet(null);
@@ -239,14 +258,18 @@ export default function CartelaSelect() {
 
   useEffect(() => {
     let active = true;
-    const requestStarted = Date.now();
-    void playerApi.time().then(({ iso }) => {
-      const requestFinished = Date.now();
-      const serverNow = new Date(iso).getTime();
-      if (active && Number.isFinite(serverNow)) setServerClockOffset(serverNow - ((requestStarted + requestFinished) / 2));
-    }).catch(() => undefined);
-    return () => { active = false; };
-  }, [round?.id]);
+    const sync = () => {
+      const requestStarted = Date.now();
+      void playerApi.time().then(({ iso }) => {
+        const requestFinished = Date.now();
+        const serverNow = new Date(iso).getTime();
+        if (active && Number.isFinite(serverNow)) setServerClockOffset(serverNow - ((requestStarted + requestFinished) / 2));
+      }).catch(() => undefined);
+    };
+    sync();
+    const interval = window.setInterval(sync, 30000);
+    return () => { active = false; window.clearInterval(interval); };
+  }, []);
 
   useEffect(() => {
     const deadline = round?.selection_deadline ? new Date(round.selection_deadline).getTime() : 0;
@@ -269,9 +292,12 @@ export default function CartelaSelect() {
       setError("");
       void confirmSelection();
     } else if (!pendingSelection.length) {
-      navigate("/", { replace: true });
+      // The legacy flow immediately found the next round here. Navigating home
+      // leaves this expired round mounted in the browser history and causes the
+      // observed Go/CLOSED/back/re-enter loop.
+      restartSelection();
     }
-  }, [navigate, round?.id, seconds, selected.length]);
+  }, [restartSelection, round?.id, seconds, selected.length]);
 
   useEffect(() => {
     if (!expired || !round?.id || round.status !== "selecting") return;
@@ -354,8 +380,8 @@ export default function CartelaSelect() {
             setExpired(true);
             if (latest.status === "playing" || joined.length > 0) {
               navigate(`/game?round=${encodeURIComponent(targetId)}`, { replace: true });
-            } else if (latest.status === "completed") {
-              navigate("/", { replace: true });
+            } else {
+              restartSelection();
             }
             return;
           }
@@ -369,7 +395,7 @@ export default function CartelaSelect() {
       }
     };
     selectionQueue.current = selectionQueue.current.then(execute, execute);
-  }, [applyPoolSnapshot, applyPlayWallet, busy, committedWallet, expired, player?.user_id, publishSelected, round?.id, sharedCartelaCount, stake, taken, wallet]);
+  }, [applyPoolSnapshot, applyPlayWallet, busy, committedWallet, expired, player?.user_id, publishSelected, restartSelection, round?.id, sharedCartelaCount, stake, taken, wallet]);
 
   async function confirmSelection() {
     if (!selectedRef.current.length || busy || !player?.user_id) return;
@@ -386,7 +412,10 @@ export default function CartelaSelect() {
         if (!selectionIntents.current.length) break;
       }
       const committedSelection = normalizeCartelas(selectedRef.current);
-      if (!committedSelection.length) { setBusy(false); return; }
+      if (!committedSelection.length) {
+        restartSelection();
+        return;
+      }
       const activeRound = round || (await playerApi.createRound(stake)).round;
       if (!activeRound?.id) throw new Error("Round unavailable");
       const displayName = player.username ? `@${player.username.replace(/^@/, "")}` : player.first_name || "Player";
@@ -398,12 +427,12 @@ export default function CartelaSelect() {
       const activeRoundId = round?.id;
       const latest = activeRoundId ? await playerApi.round(activeRoundId).then((response) => response.round).catch(() => null) : null;
       const recovered = Boolean(latest?.players?.[String(player.user_id)]?.cartelas?.length);
-      if (recovered) {
+      if (recovered || latest?.status === "playing") {
         navigate(`/game?round=${encodeURIComponent(String(latest?.id || activeRoundId))}`, { replace: true });
         return;
       }
-      if (latest?.status === "completed") {
-        navigate("/", { replace: true });
+      if (latest?.id && (latest.status === "completed" || latest.status === "selecting")) {
+        restartSelection();
         return;
       }
       setError(e instanceof Error ? e.message : "Could not join the round");

@@ -17,6 +17,9 @@ assert "timedelta(seconds=5)" not in gateway[gateway.index("async def _game_loop
 assert "_start_game_loop(round_id)" in gateway[gateway.index("async def join_round"):gateway.index("@app.post(\"/api/rounds/{round_id}/select\")")]
 
 assert "confirmStarted.current = false" in select
+assert "const restartSelection" in select
+assert "deadlineHandoff" in select
+assert "setLoadAttempt((value) => value + 1)" in select
 assert "const recovered" in select
 assert 'latest.status === "completed"' in select
 assert 'latest.status === "playing"' in select
@@ -32,6 +35,8 @@ assert "cartelaCache" in client
 assert '"SYNCING…"' not in select and '"GO"' in select
 assert "observeRealtimeReconnect" in select and "Unable to start the next round. Please try again." in select
 assert "playerApi.createRound(stake)" in select
+assert "const interval = window.setInterval(sync, 30000)" in select
+assert "restartSelection();" in select
 assert "committedWallet" in select and "setCommittedWallet(balance)" in select
 assert "authoritativeSelectedRef" in select and "applyPoolSnapshot" in select
 assert "const pendingSelection = selectedRef.current" in select
