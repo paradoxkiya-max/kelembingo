@@ -98,9 +98,18 @@ export default function CartelaSelect() {
     authoritativeSelectedRef.current = authoritative;
     setTaken(new Set((snapshot.taken_cartelas || []).map(Number)));
     setPending(nextPending);
-    if (Number.isFinite(Number(snapshot.derash_pool))) setLiveDerashPool(Number(snapshot.derash_pool));
-    return { authoritative, visible: publishSelected(replayIntents(authoritative, selectionIntents.current)) };
-  }, [player?.user_id, publishSelected]);
+    const visible = publishSelected(replayIntents(authoritative, selectionIntents.current));
+    if (Number.isFinite(Number(snapshot.derash_pool))) {
+      // A response for the first queued selection legitimately contains one
+      // card's Derash. Reapply only the still-pending local overlay so that a
+      // two-card selection remains visually at two cards until the second
+      // authoritative response arrives.
+      const queuedCardDelta = visible.length - authoritative.length;
+      const displayedPool = Number(snapshot.derash_pool) + queuedCardDelta * stake * 0.80;
+      setLiveDerashPool(Math.round(Math.max(0, displayedPool) * 100) / 100);
+    }
+    return { authoritative, visible };
+  }, [player?.user_id, publishSelected, stake]);
 
   useEffect(() => {
     if (committedWallet !== null && wallet === committedWallet) setCommittedWallet(null);
