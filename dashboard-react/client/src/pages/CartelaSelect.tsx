@@ -71,6 +71,7 @@ export default function CartelaSelect() {
   const selectionIntents = useRef<SelectionIntent[]>([]);
   const previewSlotByCartela = useRef(new Map<number, number>());
   const selectionRequests = useRef(new Set<Promise<void>>());
+  const selectionTail = useRef<Promise<void>>(Promise.resolve());
   const selectionEpoch = useRef(0);
   const currentRoundId = useRef("");
   const deadlineHandoff = useRef(false);
@@ -80,6 +81,7 @@ export default function CartelaSelect() {
     currentRoundId.current = "";
     selectionIntents.current = [];
     selectionRequests.current.clear();
+    selectionTail.current = Promise.resolve();
   }, []);
 
   const wallet = walletValue(player?.play_wallet);
@@ -176,6 +178,7 @@ export default function CartelaSelect() {
     setError("");
     selectionRequests.current.clear();
     selectionIntents.current = [];
+    selectionTail.current = Promise.resolve();
     currentRoundId.current = "";
     // createRound is atomic: it returns the existing active round or creates
     // the next one. One request removes the post-round monitor gap and makes
@@ -271,7 +274,7 @@ export default function CartelaSelect() {
         else if (nextRound.status === "completed") restartSelection();
       }
     }).catch((e) => active && selectionEpoch.current === epoch && setLoadError(e instanceof Error ? e.message : "Unable to load this round")).finally(() => active && selectionEpoch.current === epoch && setLoading(false));
-    return () => { active = false; selectionEpoch.current += 1; currentRoundId.current = ""; selectionRequests.current.clear(); unsubscribePool?.(); unsubscribeRound?.(); unsubscribeReconnect?.(); };
+    return () => { active = false; selectionEpoch.current += 1; currentRoundId.current = ""; selectionRequests.current.clear(); selectionTail.current = Promise.resolve(); unsubscribePool?.(); unsubscribeRound?.(); unsubscribeReconnect?.(); };
   }, [abortSelectionQueue, applyPoolSnapshot, loadAttempt, navigate, publishSelected, restartSelection, stake, player?.user_id]);
 
   useEffect(() => {
@@ -423,7 +426,11 @@ export default function CartelaSelect() {
         setError(message);
       }
     };
-    const operation = execute();
+    // Keep server mutations in the same order as taps. The visual selection is
+    // still optimistic, but an older response can no longer overwrite a newer
+    // select/deselect intent when requests complete out of order.
+    const operation = selectionTail.current.then(execute);
+    selectionTail.current = operation.catch(() => undefined);
     selectionRequests.current.add(operation);
     void operation.finally(() => selectionRequests.current.delete(operation)).catch(() => undefined);
   }, [applyPoolSnapshot, applyPlayWallet, busy, committedWallet, expired, player?.user_id, publishSelected, restartSelection, round?.id, sharedCartelaCount, stake, taken, wallet]);

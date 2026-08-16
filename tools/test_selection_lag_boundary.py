@@ -7,7 +7,8 @@ source = (ROOT / "dashboard-react/client/src/pages/CartelaSelect.tsx").read_text
 
 # Contract checks tie the simulation to the real implementation rather than
 # testing an unrelated queue abstraction.
-assert "const operation = execute()" in source and "selectionRequests.current.add(operation)" in source
+assert "const operation = selectionTail.current.then(execute)" in source and "selectionRequests.current.add(operation)" in source
+assert "selectionTail.current = operation.catch(() => undefined)" in source
 assert "The server finalizer owns the deadline handoff" in source
 assert "shares the durable round/user lock" in source
 assert "for (;;)" not in source
