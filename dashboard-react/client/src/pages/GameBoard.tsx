@@ -71,9 +71,32 @@ export default function GameBoard() {
       if (previous.status === "completed" && previous.winners?.length && next.status === "completed" && !next.winners?.length) return previous;
       if (previous.status === "completed" && previous.winning_cartela && next.status === "completed" && !next.winning_cartela) return previous;
 
+      // The handoff primes GameBoard with the selected cartelas before the
+      // background join finishes. A delayed pre-join snapshot must not erase
+      // that player entry and briefly render Spectating mode.
+      if (playerId) {
+        const previousPlayer = previous.players?.[playerId];
+        const nextPlayer = next.players?.[playerId];
+        const previousCartelas = previousPlayer?.cartelas || [];
+        const nextCartelas = nextPlayer?.cartelas || [];
+        if (previousCartelas.length > 0 && nextCartelas.length === 0) {
+          return {
+            ...next,
+            players: {
+              ...(next.players || {}),
+              [playerId]: {
+                ...(nextPlayer || {}),
+                ...previousPlayer,
+                cartelas: previousCartelas,
+              },
+            },
+          };
+        }
+      }
+
       return next;
     });
-  }, []);
+  }, [playerId]);
 
   useEffect(() => {
     if (!roundId) { navigate("/", { replace: true }); return; }

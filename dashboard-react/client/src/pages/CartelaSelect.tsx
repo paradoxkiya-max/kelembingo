@@ -450,6 +450,14 @@ export default function CartelaSelect() {
     // for every old tap acknowledgement or a second REST round read.
     const handoffRound: Round = {
       ...activeRound,
+      players: {
+        ...(activeRound.players || {}),
+        [userId]: {
+          ...(activeRound.players?.[userId] || {}),
+          cartelas: committedSelection,
+          name: displayName,
+        },
+      },
       pending_selections: {
         ...(activeRound.pending_selections || {}),
         [userId]: committedSelection,

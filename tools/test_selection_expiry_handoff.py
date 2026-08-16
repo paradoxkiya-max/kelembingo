@@ -60,6 +60,9 @@ assert 'const committedSelection = normalizeCartelas(selectedRef.current)' in se
 assert 'The server finalizer owns the deadline handoff' in select
 assert 'shares the durable round/user lock' in select
 assert 'for (;;)' not in select
+assert 'cartelas: committedSelection' in select
+assert 'A delayed pre-join snapshot must not erase' in game
+assert 'previousCartelas.length > 0 && nextCartelas.length === 0' in game
 
 assert "@/components/ui/switch" in game
 assert "Auto mark" in game
