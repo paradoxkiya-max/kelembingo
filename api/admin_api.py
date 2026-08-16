@@ -602,6 +602,14 @@ def get_server_time():
 _active_game_tasks = {}  # round_id -> asyncio.Task
 _user_operation_locks = {}  # user_id -> asyncio.Lock for wallet operations in this process
 
+# Additive reference-inspired room protocol. Existing REST select/unselect
+# remains the durable fallback; this layer only serializes room intent delivery
+# and reuses the same transaction function and response contract.
+ROOM_PROTOCOL_ENABLED = os.getenv("ROOM_PROTOCOL_ENABLED", "true").lower() == "true"
+_room_intent_locks = {}  # round_id -> asyncio.Lock
+_room_intent_results = {}  # round_id -> bounded intent_id -> ack payload
+_ROOM_INTENT_RESULT_LIMIT = 1024
+
 # Realtime delivery state. Direct request handlers and the durable event bridge can
 # observe the same write; identical snapshots are emitted only once per process.
 _realtime_state_lock = asyncio.Lock()
@@ -782,6 +790,11 @@ async def _start_playing_round(round_id: str, round_data: dict) -> bool:
         'selection_finalized_at': now,
     }))
     await broadcast_event('rounds', round_id)
+    await _emit_round_lifecycle_event("round_started", round_id, {
+        "status": "playing",
+        "game_started_at": now.isoformat(),
+        "next_number_at": (now + timedelta(seconds=NUMBER_CALL_INTERVAL)).isoformat(),
+    })
     return True
 
 
@@ -929,6 +942,11 @@ async def _game_loop(round_id: str):
                         except: pass
                     # payout_processed already set atomically inside end_round
                     await broadcast_event('rounds', round_id)
+                    await _emit_round_lifecycle_event("round_ended", round_id, {
+                        "status": "completed",
+                        "winner_ids": winners,
+                        "called_numbers": data.get("called_numbers", []),
+                    })
                 return
 
             # Keep a visible five-second countdown between calls. Prefer the
@@ -972,6 +990,11 @@ async def _game_loop(round_id: str):
                 else:
                     logger.error(f"[GameLoop] No-winner refund failed for {round_id}: {result}")
                 await broadcast_event('rounds', round_id)
+                await _emit_round_lifecycle_event("round_ended", round_id, {
+                    "status": "completed",
+                    "winner_ids": [],
+                    "called_numbers": data.get("called_numbers", []),
+                })
                 return
 
             try:
@@ -1005,6 +1028,11 @@ async def _game_loop(round_id: str):
                         logger.error(f"[GameLoop] Error distributing prizes: {e}")
                 # payout_processed already set atomically inside end_round
                 await broadcast_event('rounds', round_id)
+                await _emit_round_lifecycle_event("round_ended", round_id, {
+                    "status": "completed",
+                    "winner_ids": winners,
+                    "called_numbers": rd_after.get("called_numbers", []),
+                })
                 await _provision_next_round(int(rd_after.get('stake', DEFAULT_STAKE) or DEFAULT_STAKE))
                 logger.info(
                     f"[GameLoop] ROUND COMPLETE {round_id}: "
@@ -1013,6 +1041,11 @@ async def _game_loop(round_id: str):
                 return
 
             called_now = rd_after.get('called_numbers', [])
+            await _emit_round_lifecycle_event("number_called", round_id, {
+                "number": number,
+                "history": called_now,
+                "next_number_at": rd_after.get("next_number_at"),
+            })
             players = rd_after.get('players', {})
             player_cartelas = await asyncio.to_thread(engine.build_player_cartelas, players)
             winner_entries = await asyncio.to_thread(engine.evaluate_winners, player_cartelas, called_now)
@@ -1073,6 +1106,11 @@ async def _game_loop(round_id: str):
                 # loop's candidate when finalizing payout.
                 authoritative_ids = completion.get('winner_ids') or [int(winner_id)]
                 await broadcast_event('rounds', round_id)
+                await _emit_round_lifecycle_event("round_ended", round_id, {
+                    "status": "completed",
+                    "winner_ids": authoritative_ids,
+                    "called_numbers": rd_after.get("called_numbers", []),
+                })
                 try:
                     result = await engine.end_round(round_id, authoritative_ids)
                     if isinstance(result, dict) and result.get('error'):
@@ -1107,6 +1145,11 @@ async def _game_loop(round_id: str):
                 else:
                     logger.error(f"[GameLoop] No-winner refund failed for {round_id}: {result}")
                 await broadcast_event('rounds', round_id)
+                await _emit_round_lifecycle_event("round_ended", round_id, {
+                    "status": "completed",
+                    "winner_ids": [],
+                    "called_numbers": rd_after.get("called_numbers", []),
+                })
                 await _provision_next_round(int(rd_after.get('stake', DEFAULT_STAKE) or DEFAULT_STAKE))
                 return
 
@@ -2852,6 +2895,180 @@ def _socket_identity(data: Optional[dict]) -> Optional[dict]:
     return None
 
 
+def _room_intent_lock(round_id: str) -> asyncio.Lock:
+    lock = _room_intent_locks.get(round_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _room_intent_locks[round_id] = lock
+    return lock
+
+
+def _room_state_payload(round_id: str, user_id: str, round_data: Optional[dict] = None) -> dict:
+    """Build the authoritative room payload without changing stored documents."""
+    if round_data is None:
+        snap = db.collection("rounds").document(str(round_id)).get()
+        if not snap.exists:
+            return {
+                "type": "room_state",
+                "round_id": str(round_id),
+                "exists": False,
+                "status": "missing",
+                "user_id": str(user_id),
+            }
+        round_data = snap.to_dict() or {}
+    pool = _cartela_pool_snapshot(round_data)
+    player = (round_data.get("players", {}) or {}).get(str(user_id), {}) or {}
+    pending_for_user = (round_data.get("pending_selections", {}) or {}).get(str(user_id), []) or []
+    selected_cartelas = list(player.get("cartelas", []) or []) or list(pending_for_user)
+    return {
+        "type": "room_state",
+        "round_id": str(round_id),
+        "exists": True,
+        "status": round_data.get("status"),
+        "selection_deadline": round_data.get("selection_deadline"),
+        "game_started_at": round_data.get("game_started_at"),
+        "next_number_at": round_data.get("next_number_at"),
+        "called_numbers": round_data.get("called_numbers", []) or [],
+        "last_called_number": round_data.get("last_called_number"),
+        "player_count": pool.get("player_count", 0),
+        "derash_pool": pool.get("derash_pool", 0),
+        "taken_cartelas": round_data.get("taken_cartelas", []) or [],
+        "pending_selections": round_data.get("pending_selections", {}) or {},
+        "pending_revision": int(round_data.get("pending_revision", 0) or 0),
+        "selected_cartelas": selected_cartelas,
+        "player": player,
+        "round": {"id": str(round_id), **round_data},
+        "user_id": str(user_id),
+    }
+
+
+async def _emit_room_state(round_id: str, user_id: str, round_data: Optional[dict] = None, sid: Optional[str] = None):
+    payload = await asyncio.to_thread(_room_state_payload, str(round_id), str(user_id), round_data)
+    if sid:
+        await sio.emit("room_state", payload, to=sid)
+    else:
+        await sio.emit("room_state", payload, room=f"rounds:{round_id}")
+    return payload
+
+
+async def _emit_round_lifecycle_event(event: str, round_id: str, data: Optional[dict] = None):
+    payload = {"type": event, "round_id": str(round_id), **(data or {})}
+    await sio.emit(event, payload, room=f"rounds:{round_id}")
+
+
+async def _emit_room_compat_updates(round_id: str, user_id: str, result: dict):
+    """Keep legacy snapshot subscribers in sync after a room intent commits."""
+    pool_snapshot = {
+        "type": "cartela_pool",
+        "round_id": str(round_id),
+        "taken_cartelas": result.get("_taken", []),
+        "player_count": result.get("_pc", 0),
+        "derash_pool": result.get("_derash", 0),
+        "pending_revision": result.get("_revision", 0),
+        "pending_selections": result.get("_pending", {}),
+    }
+    await sio.emit("cartela_pool", pool_snapshot, room=f"rounds:{round_id}")
+    asyncio.create_task(broadcast_event("users", str(user_id)))
+    asyncio.create_task(broadcast_event("rounds", str(round_id)))
+
+
+@sio.event
+async def room_join(sid, data):
+    """Join an authenticated room and receive one authoritative state snapshot."""
+    data = data or {}
+    round_id = str(data.get("round_id") or "").strip()
+    identity = _socket_identity(data)
+    requested_user = str(data.get("user_id") or "").strip()
+    if not round_id or not identity or identity.get("kind") != "player":
+        return {"ok": False, "error": "Unauthorized room join"}
+    user_id = str(identity.get("user_id"))
+    if requested_user and requested_user != user_id:
+        return {"ok": False, "error": "Forbidden room join"}
+    await sio.enter_room(sid, f"rounds:{round_id}")
+    payload = await _emit_room_state(round_id, user_id, sid=sid)
+    return {"ok": bool(payload.get("exists")), **payload}
+
+
+@sio.event
+async def room_leave(sid, data):
+    data = data or {}
+    round_id = str(data.get("round_id") or "").strip()
+    if round_id:
+        await sio.leave_room(sid, f"rounds:{round_id}")
+    return {"ok": True}
+
+
+@sio.event
+async def room_intent(sid, data):
+    """Serialize one select/unselect intent through the existing durable transaction."""
+    data = data or {}
+    round_id = str(data.get("round_id") or "").strip()
+    intent_id = str(data.get("intent_id") or data.get("request_id") or "").strip()[:96]
+    action = str(data.get("action") or "").strip().lower()
+    try:
+        cartela_number = int(data.get("cartela_number"))
+    except (TypeError, ValueError):
+        cartela_number = 0
+    identity = _socket_identity(data)
+    if not ROOM_PROTOCOL_ENABLED:
+        return {"ok": False, "error": "room_protocol_disabled", "intent_id": intent_id}
+    if not round_id or not intent_id or action not in {"select", "unselect"}:
+        return {"ok": False, "error": "Invalid room intent", "intent_id": intent_id}
+    if not identity or identity.get("kind") != "player":
+        return {"ok": False, "error": "Unauthorized room intent", "intent_id": intent_id}
+    user_id = str(identity.get("user_id"))
+    requested_user = str(data.get("user_id") or "").strip()
+    if requested_user and requested_user != user_id:
+        return {"ok": False, "error": "Forbidden room intent", "intent_id": intent_id}
+
+    lock = _room_intent_lock(round_id)
+    async with lock:
+        cache = _room_intent_results.setdefault(round_id, {})
+        cached = cache.get(intent_id)
+        if cached:
+            if str(cached.get("user_id")) != user_id:
+                return {"ok": False, "error": "Intent ID already used", "intent_id": intent_id}
+            await sio.emit("room_ack", cached, to=sid)
+            return cached
+
+        result = await asyncio.to_thread(
+            _mutate_pending_selection_sync,
+            round_id,
+            user_id,
+            cartela_number,
+            action == "select",
+            intent_id,
+        )
+        ack = {
+            "type": "room_ack",
+            "ok": "error" not in result,
+            "intent_id": intent_id,
+            "round_id": round_id,
+            "user_id": user_id,
+            "action": action,
+            "cartela_number": cartela_number,
+            "error": result.get("error"),
+            "play_wallet": result.get("play_wallet"),
+            "selected_cartelas": result.get("selected_cartelas", result.get("joined_cartelas", [])),
+            "reserved_cartelas": result.get("reserved_cartelas", []),
+            "taken_cartelas": result.get("_taken", []),
+            "pending_selections": result.get("_pending", {}),
+            "pending_revision": result.get("_revision", 0),
+            "player_count": result.get("_pc", 0),
+            "derash_pool": result.get("_derash", 0),
+        }
+        cache[intent_id] = ack
+        while len(cache) > _ROOM_INTENT_RESULT_LIMIT:
+            cache.pop(next(iter(cache)))
+        await sio.emit("room_ack", ack, to=sid)
+        if "error" not in result:
+            await _emit_room_compat_updates(round_id, user_id, result)
+        state = await _emit_room_state(round_id, user_id)
+        ack["status"] = state.get("status")
+        ack["round"] = state.get("round")
+        return ack
+
+
 @sio.event
 async def subscribe(sid, data):
     """Join only public rooms or rooms authorized for the supplied browser token."""
@@ -2939,6 +3156,26 @@ async def broadcast_event(collection: str, doc_id: str):
             "exists": snap.exists,
         }
         await sio.emit('snapshot', payload, room=room_exact)
+        if collection == "rounds":
+            round_data = snapshot_data or {}
+            pool = _cartela_pool_snapshot(round_data) if snap.exists else {}
+            await sio.emit("room_state", {
+                "type": "room_state",
+                "round_id": str(doc_id),
+                "exists": snap.exists,
+                "status": round_data.get("status") if snap.exists else "missing",
+                "selection_deadline": round_data.get("selection_deadline") if snap.exists else None,
+                "game_started_at": round_data.get("game_started_at") if snap.exists else None,
+                "next_number_at": round_data.get("next_number_at") if snap.exists else None,
+                "called_numbers": round_data.get("called_numbers", []) if snap.exists else [],
+                "last_called_number": round_data.get("last_called_number") if snap.exists else None,
+                "taken_cartelas": round_data.get("taken_cartelas", []) if snap.exists else [],
+                "pending_selections": round_data.get("pending_selections", {}) if snap.exists else {},
+                "pending_revision": int(round_data.get("pending_revision", 0) or 0) if snap.exists else 0,
+                "player_count": pool.get("player_count", 0),
+                "derash_pool": pool.get("derash_pool", 0),
+                "round": {"id": str(doc_id), **round_data} if snap.exists else None,
+            }, room=room_exact)
 
         # Collection listeners receive only the changed document. The client
         # applies its own query filters before invoking the listener callback.

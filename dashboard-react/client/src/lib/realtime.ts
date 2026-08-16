@@ -3,7 +3,9 @@
 import { io, type Socket } from "socket.io-client";
 import { GATEWAY_URL, gatewayFetch, type Player, type Round } from "@/lib/gateway";
 
-type SnapshotMessage = { collection?: string; id?: string; user_id?: string; round_id?: string; type?: string; data?: unknown; docs?: Array<{ id?: string; data?: unknown }>; exists?: boolean; taken_cartelas?: number[]; player_count?: number; derash_pool?: number; pending_revision?: number; pending_selections?: Record<string, number[]> };
+type SnapshotMessage = { collection?: string; id?: string; user_id?: string; round_id?: string; type?: string; data?: unknown; docs?: Array<{ id?: string; data?: unknown }>; exists?: boolean; status?: string; selection_deadline?: string | null; game_started_at?: string | null; next_number_at?: string | null; called_numbers?: number[]; last_called_number?: number | null; selected_cartelas?: number[]; taken_cartelas?: number[]; player_count?: number; derash_pool?: number; pending_revision?: number; pending_selections?: Record<string, number[]>; round?: Round; error?: string | null; intent_id?: string };
+export type RoomIntent = { round_id: string; user_id: string; intent_id: string; action: "select" | "unselect"; cartela_number: number };
+export type RoomAck = SnapshotMessage & { ok: boolean; action?: "select" | "unselect"; cartela_number?: number; play_wallet?: number; reserved_cartelas?: number[] };
 type Listener = (value: Round | null) => void;
 type Subscription = { collection: string; doc_id?: string; player_token?: string; admin_token?: string };
 const roundSnapshotCache = new Map<string, Round>();
@@ -34,6 +36,7 @@ class RoomManager {
       this.socket.on("snapshot", (message: SnapshotMessage) => this.dispatch("snapshot", message));
       this.socket.on("query_snapshot", (message: SnapshotMessage) => this.dispatch("query_snapshot", message));
       this.socket.on("cartela_pool", (message: SnapshotMessage) => this.dispatch("cartela_pool", message));
+      this.socket.on("room_state", (message: SnapshotMessage) => this.dispatch("room_state", message));
       this.socket.on("payment_update", (message: SnapshotMessage) => this.dispatch("payment_update", message));
       return this.socket;
     } catch { this.socket = null; return null; }
@@ -50,12 +53,54 @@ class RoomManager {
       });
       return;
     }
-    const collection = event === "cartela_pool" ? "rounds" : event === "payment_update" ? "payments" : message.collection || "";
+    const collection = event === "cartela_pool" || event === "room_state" ? "rounds" : event === "payment_update" ? "payments" : message.collection || "";
     const id = event === "payment_update" ? String(message.user_id || "") : message.id || message.round_id || String((message.data as { id?: string } | undefined)?.id || "");
     Array.from(this.rooms.values()).forEach((room) => {
       if (room.data.collection !== collection || String(room.data.doc_id || "") !== String(id)) return;
       Array.from(room.listeners).forEach((listener) => listener(message));
     });
+  }
+
+  private request<T extends SnapshotMessage>(event: string, payload: Record<string, unknown>, timeoutMs = 6000): Promise<T> {
+    const socket = this.connect();
+    if (!socket) return Promise.reject(new Error("Realtime connection unavailable"));
+    const playerToken = window.localStorage.getItem("kelembingo.playerToken");
+    return new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const finishResolve = (value: T) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        resolve(value);
+      };
+      const finishReject = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        reject(error);
+      };
+      const timeout = window.setTimeout(() => finishReject(new Error("Realtime request timed out")), timeoutMs);
+      const emit = () => {
+        socket.emit(event, { ...payload, ...(playerToken ? { player_token: playerToken } : {}) }, (response: T) => {
+          if (response && typeof response === "object") finishResolve(response);
+          else finishReject(new Error("Invalid realtime response"));
+        });
+      };
+      if (socket.connected) emit();
+      else socket.once("connect", emit);
+    });
+  }
+
+  roomJoin(roundId: string, userId: string) {
+    return this.request<SnapshotMessage>("room_join", { round_id: roundId, user_id: userId });
+  }
+
+  roomIntent(intent: RoomIntent) {
+    return this.request<RoomAck>("room_intent", intent);
+  }
+
+  roomLeave(roundId: string) {
+    return this.request<SnapshotMessage>("room_leave", { round_id: roundId }, 2500).catch(() => ({ ok: true } as SnapshotMessage));
   }
 
   subscribeDocument(collection: string, docId: string, listener: (message: SnapshotMessage) => void) {
@@ -95,7 +140,11 @@ export function observeRound(roundId: string, listener: Listener, options: { fet
   const handle = (message: SnapshotMessage) => {
     if (message.type === "cartela_pool") return;
     const raw = message.data && typeof message.data === "object" ? message.data as Record<string, unknown> : null;
-    const payload = raw && raw.round && typeof raw.round === "object" ? raw.round as Round : raw as Round | null;
+    const payload = message.round && typeof message.round === "object"
+      ? message.round
+      : raw && raw.round && typeof raw.round === "object"
+        ? raw.round as Round
+        : raw as Round | null;
     if (!loaded) queued = message;
     else if (message.exists === false) deliver(null);
     else if (payload) { roundSnapshotCache.set(roundId, payload); deliver(payload); }
@@ -104,7 +153,7 @@ export function observeRound(roundId: string, listener: Listener, options: { fet
   if (cached) listener(cached);
   if (fetchInitial) {
     gatewayFetch<{ round?: Round }>(`/api/rounds/${encodeURIComponent(roundId)}`)
-      .then((response) => { loaded = true; if (response.round) roundSnapshotCache.set(roundId, response.round); deliver(response.round || null); if (queued) { const latest = queued; queued = null; if (latest.exists === false) deliver(null); else if (latest.data) deliver(latest.data as Round); } })
+      .then((response) => { loaded = true; if (response.round) roundSnapshotCache.set(roundId, response.round); deliver(response.round || null); if (queued) { const latest = queued; queued = null; if (latest.exists === false) deliver(null); else if (latest.round) deliver(latest.round); else if (latest.data) deliver(latest.data as Round); } })
       .catch(() => { loaded = true; options.onError?.(); });
   }
   return unsubscribe;

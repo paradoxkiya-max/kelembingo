@@ -19,6 +19,9 @@ services:
       # Exactly one Render service must own round progression.
       - key: GAME_ENGINE_ENABLED
         value: "true"
+      # Additive reference-inspired room intents; set false for REST rollback.
+      - key: ROOM_PROTOCOL_ENABLED
+        value: "true"
       - key: DATABASE_URL
         sync: false
       - key: ADMIN_AUTH_SECRET

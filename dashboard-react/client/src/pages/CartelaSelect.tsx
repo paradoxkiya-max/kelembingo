@@ -6,7 +6,7 @@ import { useLocation, useSearch } from "wouter";
 import { usePlayer } from "@/contexts/PlayerContext";
 import { playerApi, type Cartela, type Round } from "@/lib/gateway";
 import { walletValue } from "@/lib/format";
-import { observeCartelaPool, observeRealtimeReconnect, observeRound, primeRoundSnapshot } from "@/lib/realtime";
+import { observeCartelaPool, observeRealtimeReconnect, observeRound, primeRoundSnapshot, roomManager } from "@/lib/realtime";
 
 const STAKES = [10, 20];
 const MAX_SELECTIONS = 2;
@@ -70,7 +70,7 @@ export default function CartelaSelect() {
   const authoritativeSelectedRef = useRef<number[]>([]);
   const selectionIntents = useRef<SelectionIntent[]>([]);
   const previewSlotByCartela = useRef(new Map<number, number>());
-  const selectionQueue = useRef<Promise<void>>(Promise.resolve());
+  const selectionRequests = useRef(new Set<Promise<void>>());
   const selectionEpoch = useRef(0);
   const currentRoundId = useRef("");
   const deadlineHandoff = useRef(false);
@@ -79,7 +79,7 @@ export default function CartelaSelect() {
     selectionEpoch.current += 1;
     currentRoundId.current = "";
     selectionIntents.current = [];
-    selectionQueue.current = Promise.resolve();
+    selectionRequests.current.clear();
   }, []);
 
   const wallet = walletValue(player?.play_wallet);
@@ -174,7 +174,7 @@ export default function CartelaSelect() {
     let unsubscribeReconnect: (() => void) | null = null;
     setLoadError("");
     setError("");
-    selectionQueue.current = Promise.resolve();
+    selectionRequests.current.clear();
     selectionIntents.current = [];
     currentRoundId.current = "";
     // createRound is atomic: it returns the existing active round or creates
@@ -251,6 +251,11 @@ export default function CartelaSelect() {
             navigate(`/game?round=${encodeURIComponent(targetId)}`, { replace: true });
           } else if (latest.status === "completed") restartSelection();
         };
+        void roomManager.roomJoin(String(nextRound.id), String(player?.user_id || "")).then((roomSnapshot) => {
+          if (!active || selectionEpoch.current !== epoch) return;
+          const authoritativeRound = roomSnapshot.round;
+          if (authoritativeRound) applyRoundSnapshot(authoritativeRound);
+        }).catch(() => undefined);
         unsubscribeRound = observeRound(nextRound.id, (latest) => {
           if (latest) applyRoundSnapshot(latest);
         }, { fetchInitial: false });
@@ -262,7 +267,7 @@ export default function CartelaSelect() {
         else if (nextRound.status === "completed") restartSelection();
       }
     }).catch((e) => active && selectionEpoch.current === epoch && setLoadError(e instanceof Error ? e.message : "Unable to load this round")).finally(() => active && selectionEpoch.current === epoch && setLoading(false));
-    return () => { active = false; selectionEpoch.current += 1; currentRoundId.current = ""; unsubscribePool?.(); unsubscribeRound?.(); unsubscribeReconnect?.(); };
+    return () => { active = false; selectionEpoch.current += 1; currentRoundId.current = ""; selectionRequests.current.clear(); unsubscribePool?.(); unsubscribeRound?.(); unsubscribeReconnect?.(); };
   }, [abortSelectionQueue, applyPoolSnapshot, loadAttempt, navigate, publishSelected, restartSelection, stake, player?.user_id]);
 
   useEffect(() => {
@@ -365,9 +370,17 @@ export default function CartelaSelect() {
     const execute = async () => {
       if (selectionEpoch.current !== epoch || currentRoundId.current !== roundId || deadlineHandoff.current) return;
       try {
-        const result = await (intent.selecting
-          ? playerApi.selectCartela(roundId, userId, number, intent.id)
-          : playerApi.unselectCartela(roundId, userId, number, intent.id));
+        let result;
+        try {
+          result = await roomManager.roomIntent({ round_id: roundId, user_id: userId, intent_id: intent.id, action: intent.selecting ? "select" : "unselect", cartela_number: number });
+          if (!result.ok && /room_protocol_disabled|realtime connection unavailable|realtime request timed out/i.test(result.error || "")) throw new Error(result.error || "Realtime fallback");
+          if (!result.ok) throw new Error(result.error || "Selection failed");
+        } catch (roomError) {
+          if (!/room_protocol_disabled|realtime connection unavailable|realtime request timed out|invalid realtime response/i.test(roomError instanceof Error ? roomError.message : "")) throw roomError;
+          result = await (intent.selecting
+            ? playerApi.selectCartela(roundId, userId, number, intent.id)
+            : playerApi.unselectCartela(roundId, userId, number, intent.id));
+        }
         if (selectionEpoch.current !== epoch || currentRoundId.current !== roundId) return;
         selectionIntents.current = selectionIntents.current.filter((item) => item.id !== intent.id);
         const applied = applyPoolSnapshot(result);
@@ -406,7 +419,9 @@ export default function CartelaSelect() {
         setError(message);
       }
     };
-    selectionQueue.current = selectionQueue.current.then(execute, execute);
+    const operation = execute();
+    selectionRequests.current.add(operation);
+    void operation.finally(() => selectionRequests.current.delete(operation)).catch(() => undefined);
   }, [applyPoolSnapshot, applyPlayWallet, busy, committedWallet, expired, player?.user_id, publishSelected, restartSelection, round?.id, sharedCartelaCount, stake, taken, wallet]);
 
   async function confirmSelection() {
@@ -417,11 +432,10 @@ export default function CartelaSelect() {
       // is waiting, and the join must observe the post-removal state rather
       // than the queue snapshot captured before that tap.
       for (;;) {
-        const queued = selectionQueue.current;
-        await queued;
+        const inFlight = Array.from(selectionRequests.current);
+        if (inFlight.length) await Promise.allSettled(inFlight);
         await Promise.resolve();
-        if (queued !== selectionQueue.current) continue;
-        if (!selectionIntents.current.length) break;
+        if (!selectionRequests.current.size && !selectionIntents.current.length) break;
       }
       const committedSelection = normalizeCartelas(selectedRef.current);
       if (!committedSelection.length) {

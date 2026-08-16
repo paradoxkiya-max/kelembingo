@@ -55,7 +55,7 @@ assert 'aria-label={`Remove selected Cartela ${number}`}' in select
 assert 'onClick={() => void toggleCard(number)}' in select
 assert 'previewSlotByCartela' in select and 'selected.find((candidate) => previewSlotByCartela.current.get(candidate) === slot)' in select
 assert '(busy && !isSelected)' in select and 'disabled={expired}' in select
-assert 'for (;;)' in select and 'queued !== selectionQueue.current' in select and 'const committedSelection = normalizeCartelas(selectedRef.current)' in select
+assert 'for (;;)' in select and 'Array.from(selectionRequests.current)' in select and 'const committedSelection = normalizeCartelas(selectedRef.current)' in select
 
 assert "@/components/ui/switch" in game
 assert "Auto mark" in game
