@@ -8,10 +8,9 @@ source = (ROOT / "dashboard-react/client/src/pages/CartelaSelect.tsx").read_text
 # Contract checks tie the simulation to the real implementation rather than
 # testing an unrelated queue abstraction.
 assert "const operation = execute()" in source and "selectionRequests.current.add(operation)" in source
-assert "for (;;)" in source
-assert "const inFlight = Array.from(selectionRequests.current)" in source
-assert "if (!selectionRequests.current.size && !selectionIntents.current.length) break" in source
-assert "await Promise.resolve()" in source
+assert "The server finalizer owns the deadline handoff" in source
+assert "shares the durable round/user lock" in source
+assert "for (;;)" not in source
 assert "const committedSelection = normalizeCartelas(selectedRef.current)" in source
 assert "const SELECTION_SECONDS = 45;" in source
 assert "window.setInterval(sync, 250)" in source

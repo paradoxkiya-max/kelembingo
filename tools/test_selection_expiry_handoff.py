@@ -20,7 +20,8 @@ assert "confirmStarted.current = false" in select
 assert "const restartSelection" in select
 assert "deadlineHandoff" in select
 assert "setLoadAttempt((value) => value + 1)" in select
-assert "const recovered" in select
+assert "const latest = await playerApi.round(activeRoundId)" in select
+assert "requirePending: true" in select and "pendingRevision" in select
 assert 'latest.status === "completed"' in select
 assert 'latest.status === "playing"' in select
 assert 'joinedCartelas.length > 0' in select
@@ -45,7 +46,7 @@ assert "const retryTimers = [1000, 2500, 5000]" in select
 assert "avoid issuing 30 requests per player" in select
 assert "active_stakes = set()" not in gateway
 assert 'REALTIME_EVENT_POLL_SECONDS", "0.5"' in gateway
-assert "cartelas.length === 0" in game
+assert "playerCartelaNumbers.length === 0" in game
 assert 'Spectating mode' in game
 assert 'This round started without your cartelas' not in select
 assert '"Play now"' not in select
@@ -55,7 +56,10 @@ assert 'aria-label={`Remove selected Cartela ${number}`}' in select
 assert 'onClick={() => void toggleCard(number)}' in select
 assert 'previewSlotByCartela' in select and 'selected.find((candidate) => previewSlotByCartela.current.get(candidate) === slot)' in select
 assert '(busy && !isSelected)' in select and 'disabled={expired}' in select
-assert 'for (;;)' in select and 'Array.from(selectionRequests.current)' in select and 'const committedSelection = normalizeCartelas(selectedRef.current)' in select
+assert 'const committedSelection = normalizeCartelas(selectedRef.current)' in select
+assert 'The server finalizer owns the deadline handoff' in select
+assert 'shares the durable round/user lock' in select
+assert 'for (;;)' not in select
 
 assert "@/components/ui/switch" in game
 assert "Auto mark" in game

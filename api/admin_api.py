@@ -659,6 +659,8 @@ class JoinRoundRequest(BaseModel):
     user_id: int
     cartela_numbers: List[int]
     user_name: str = "Player"
+    require_pending: bool = False
+    pending_revision: int = 0
 
 
 class SelectRequest(BaseModel):
@@ -1387,7 +1389,12 @@ async def join_round(round_id: str, req: JoinRoundRequest, request: Request):
     """Player joins a round with chosen cartelas (user verified from player token)."""
     user_id = _actor_user_id(request, req.user_id)
     result = await engine.join_round(
-        round_id, user_id, req.cartela_numbers, req.user_name
+        round_id,
+        user_id,
+        req.cartela_numbers,
+        req.user_name,
+        require_pending=req.require_pending,
+        pending_revision=req.pending_revision,
     )
     if 'error' in result:
         raise HTTPException(status_code=400, detail=result['error'])

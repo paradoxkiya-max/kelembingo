@@ -431,45 +431,49 @@ export default function CartelaSelect() {
   async function confirmSelection() {
     if (!selectedRef.current.length || busy || !player?.user_id) return;
     setBusy(true);
-    try {
-      // Drain repeatedly: a removal can be tapped while automatic confirmation
-      // is waiting, and the join must observe the post-removal state rather
-      // than the queue snapshot captured before that tap.
-      for (;;) {
-        const inFlight = Array.from(selectionRequests.current);
-        if (inFlight.length) await Promise.allSettled(inFlight);
-        await Promise.resolve();
-        if (!selectionRequests.current.size && !selectionIntents.current.length) break;
-      }
-      const committedSelection = normalizeCartelas(selectedRef.current);
-      if (!committedSelection.length) {
-        restartSelection();
-        return;
-      }
-      const activeRound = round || (await playerApi.createRound(stake)).round;
-      if (!activeRound?.id) throw new Error("Round unavailable");
-      const displayName = player.username ? `@${player.username.replace(/^@/, "")}` : player.first_name || "Player";
-      try { await playerApi.joinRound(activeRound.id, player.user_id, committedSelection, displayName); }
-      catch (joinError) { if (!/already joined/i.test(joinError instanceof Error ? joinError.message : "")) throw joinError; }
-      primeRoundSnapshot(String(activeRound.id), { ...activeRound, players: { ...(activeRound.players || {}), [String(player.user_id)]: { cartelas: committedSelection, name: displayName } } });
-      abortSelectionQueue();
-      navigate(`/game?round=${encodeURIComponent(activeRound.id)}`, { replace: true });
-    } catch (e) {
-      const activeRoundId = round?.id;
-      const latest = activeRoundId ? await playerApi.round(activeRoundId).then((response) => response.round).catch(() => null) : null;
-      const recovered = Boolean(latest?.players?.[String(player.user_id)]?.cartelas?.length);
-      if (recovered || latest?.status === "playing") {
-        abortSelectionQueue();
-        navigate(`/game?round=${encodeURIComponent(String(latest?.id || activeRoundId))}`, { replace: true });
-        return;
-      }
-      if (latest?.id && (latest.status === "completed" || latest.status === "selecting")) {
-        restartSelection();
-        return;
-      }
-      setError(e instanceof Error ? e.message : "Could not join the round");
-      setBusy(false);
+    const committedSelection = normalizeCartelas(selectedRef.current);
+    if (!committedSelection.length) {
+      restartSelection();
+      return;
     }
+    const activeRound = round;
+    if (!activeRound?.id || player.user_id === undefined || player.user_id === null) {
+      restartSelection();
+      return;
+    }
+    const activeRoundId = String(activeRound.id);
+
+    const userId = String(player.user_id);
+    const displayName = player.username ? `@${player.username.replace(/^@/, "")}` : player.first_name || "Player";
+    // The server finalizer owns the deadline handoff. Prime GameBoard with the
+    // latest pending selection and navigate now; do not make the browser wait
+    // for every old tap acknowledgement or a second REST round read.
+    const handoffRound: Round = {
+      ...activeRound,
+      pending_selections: {
+        ...(activeRound.pending_selections || {}),
+        [userId]: committedSelection,
+      },
+    };
+    primeRoundSnapshot(activeRoundId, handoffRound);
+    abortSelectionQueue();
+    navigate(`/game?round=${encodeURIComponent(activeRoundId)}`, { replace: true });
+
+    // Finalization is intentionally background work. It is idempotent and
+    // shares the durable round/user lock with the gateway deadline finalizer;
+    // whichever path reaches the transaction first safely wins.
+    void (async () => {
+      try {
+        await playerApi.joinRound(activeRoundId, userId, committedSelection, displayName, {
+          requirePending: true,
+          pendingRevision: Number(activeRound.pending_revision || 0),
+        });
+      } catch (joinError) {
+        if (!/already joined|selection window closed|round is no longer accepting/i.test(joinError instanceof Error ? joinError.message : "")) return;
+      }
+      const latest = await playerApi.round(activeRoundId).then((response) => response.round).catch(() => null);
+      if (latest?.id) primeRoundSnapshot(activeRoundId, latest);
+    })();
   }
 
   return <div className="flex min-h-[calc(100vh-56px)] flex-col bg-[linear-gradient(180deg,#0d0f22_0%,#151833_40%,#0d0f22_100%)]">
