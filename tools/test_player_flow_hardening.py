@@ -30,7 +30,8 @@ assert "Returning to cartela selection in" in winner_popup and "You" in winner_p
 assert "Won with Cartela" in winner_popup and "Derash" in winner_popup
 assert "fetchInitial" in realtime
 assert 'setAuthError(""); setPlayer(null)' not in context
-assert 'navigate(`/game?round=${encodeURIComponent(String(nextRound.id))}`, { replace: true })' in select
+assert 'navigate(`/game?round=${encodeURIComponent(targetId)}`, { replace: true })' in select
+assert 'primeRoundSnapshot(targetId, nextRound)' in select
 assert "CARTELA_POOL" in select and "playerApi.cartelas" not in select
 assert "DialogContent" in wallet and "Input" in wallet
 assert "role=\"alert\"" in wallet
