@@ -246,6 +246,26 @@ def _prepare_data_for_json(data):
     return cleaned
 
 
+_GATEWAY_FIELD_ALIASES = {
+    "userId": "user_id",
+    "firstName": "first_name",
+    "telebirrName": "telebirr_name",
+    "transactionId": "transaction_id",
+    "senderName": "sender_name",
+    "idempotencyKey": "idempotency_key",
+}
+
+
+def _prepare_gateway_payload(data):
+    payload = _prepare_data_for_json(data)
+    if not isinstance(payload, dict):
+        return payload
+    for source, target in _GATEWAY_FIELD_ALIASES.items():
+        if source in payload and target not in payload:
+            payload[target] = payload.pop(source)
+    return payload
+
+
 # ── Document Reference ───────────────────────────────────────────
 class GatewayDocRef:
     def __init__(self, collection: str, doc_id: str, gateway_url: str, api_key: str = "",
@@ -555,9 +575,9 @@ class GatewayClient:
         })
 
     def create_withdrawal(self, withdrawal_data: dict, idempotency_key: str = None) -> dict:
-        payload = _prepare_data_for_json(withdrawal_data)
+        payload = _prepare_gateway_payload(withdrawal_data)
         if idempotency_key:
-            payload["idempotencyKey"] = idempotency_key
+            payload["idempotency_key"] = idempotency_key
         response = _request_with_retry(
             "POST",
             f"{self.gateway_url}/api/internal/withdrawals/create",
@@ -576,7 +596,7 @@ class GatewayClient:
     def create_deposit(self, deposit_data: dict) -> dict:
         # Telegram bot payloads include datetime values; normalize them before
         # requests/json encoding so deposit submission reaches the gateway.
-        payload = _prepare_data_for_json(deposit_data)
+        payload = _prepare_gateway_payload(deposit_data)
         response = _request_with_retry(
             "POST",
             f"{self.gateway_url}/api/internal/deposits/create",
