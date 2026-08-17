@@ -574,10 +574,13 @@ class GatewayClient:
         return result
 
     def create_deposit(self, deposit_data: dict) -> dict:
+        # Telegram bot payloads include datetime values; normalize them before
+        # requests/json encoding so deposit submission reaches the gateway.
+        payload = _prepare_data_for_json(deposit_data)
         response = _request_with_retry(
             "POST",
             f"{self.gateway_url}/api/internal/deposits/create",
-            json=deposit_data,
+            json=payload,
             headers={"Content-Type": "application/json", "X-Internal-Key": self.api_key},
             timeout=20,
         )
