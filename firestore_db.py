@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 _RAW_DATABASE_URL = os.getenv("DATABASE_URL")
 _IS_RENDER_GATEWAY = os.getenv("RENDER_API_ONLY", "").lower() == "true"
 _IS_COMBINED_SERVICE = os.getenv("COMBINED_SERVICE", "").lower() == "true"
+_IS_GATEWAY_CLIENT_WORKER = (
+    os.getenv("USE_GATEWAY", "").lower() == "true" and not _IS_RENDER_GATEWAY
+)
 _REQUIRE_POSTGRES = _IS_RENDER_GATEWAY or _IS_COMBINED_SERVICE
 if not _RAW_DATABASE_URL:
     if _REQUIRE_POSTGRES:
@@ -32,12 +35,22 @@ if DATABASE_URL.startswith("postgres://"):
     # SQLAlchemy 1.4+ requires postgresql:// instead of postgres://
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-engine = create_engine(
-    DATABASE_URL, 
-    pool_pre_ping=True,
-    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {},
-    pool_timeout=30,
-)
+_engine_options = {
+    "pool_pre_ping": True,
+    "connect_args": {"check_same_thread": False} if "sqlite" in DATABASE_URL else {},
+    "pool_timeout": 30,
+}
+if "sqlite" not in DATABASE_URL:
+    # Supabase session-mode poolers have a small connection ceiling. The
+    # combined service has one gateway process, so keep its pool bounded and
+    # prevent burst overflow from consuming every available session.
+    _engine_options.update({
+        "pool_size": int(os.getenv("DB_POOL_SIZE", "3")),
+        "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "0")),
+        "pool_recycle": 300,
+    })
+
+engine = create_engine(DATABASE_URL, **_engine_options)
 if "sqlite" in DATABASE_URL:
     with engine.begin() as conn:
         conn.execute(sqlalchemy.text("PRAGMA journal_mode=WAL"))
@@ -83,11 +96,17 @@ class AccountLock(Base):
     user_id = Column(String, primary_key=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-# Create tables (defensively catch race conditions under concurrent multi-process startup)
-try:
-    Base.metadata.create_all(bind=engine, checkfirst=True)
-except Exception as e:
-    logger.warning(f"Could not run create_all (might already be created/locked): {e}")
+# Only the gateway process owns PostgreSQL schema initialization. Bot workers
+# import the Firestore-compatible types for compatibility, but use GatewayClient
+# for all data access and must not each open a Supabase session on startup.
+if _IS_GATEWAY_CLIENT_WORKER:
+    logger.info("Skipping PostgreSQL create_all in GatewayClient worker")
+else:
+    # Create tables defensively; catch race conditions under local or gateway startup.
+    try:
+        Base.metadata.create_all(bind=engine, checkfirst=True)
+    except Exception as e:
+        logger.warning(f"Could not run create_all (might already be created/locked): {e}")
 
 # Firestore Field Special Values
 class Increment:

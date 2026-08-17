@@ -13,11 +13,73 @@ import signal
 import time
 import urllib.request
 
+import psycopg2
+
 from dotenv import load_dotenv
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("combined")
+
+_POLLING_LOCK_KEY = 827364911
+_polling_lock_connection = None
+
+
+def _acquire_polling_lock(timeout: float = 120.0):
+    """Hold a PostgreSQL advisory lock for this service's full lifetime.
+
+    Render deployments can overlap briefly, and an old backend service may
+    remain online after a new combined service is created. Telegram permits
+    only one getUpdates owner per token, so the losing service must never start
+    the gateway or any polling worker.
+    """
+    global _polling_lock_connection
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if not database_url:
+        raise RuntimeError("DATABASE_URL is required before acquiring the combined-service lock")
+
+    deadline = time.monotonic() + timeout
+    last_error = None
+    while time.monotonic() < deadline:
+        connection = None
+        try:
+            connection = psycopg2.connect(database_url, connect_timeout=5)
+            connection.autocommit = True
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT pg_try_advisory_lock(%s)", (_POLLING_LOCK_KEY,))
+                acquired = bool(cursor.fetchone()[0])
+            if acquired:
+                _polling_lock_connection = connection
+                logger.info("🔐 Combined-service ownership lock acquired")
+                return
+            connection.close()
+            logger.warning("⏳ Another combined service owns the polling lock; waiting...")
+        except Exception as exc:
+            last_error = exc
+            if connection is not None:
+                try:
+                    connection.close()
+                except Exception:
+                    pass
+            logger.warning("⏳ Could not acquire combined-service ownership lock yet: %s", exc)
+        time.sleep(5)
+
+    raise RuntimeError(f"Could not acquire combined-service ownership lock within {timeout:.0f}s: {last_error}")
+
+
+def _release_polling_lock():
+    global _polling_lock_connection
+    if _polling_lock_connection is None:
+        return
+    try:
+        with _polling_lock_connection.cursor() as cursor:
+            cursor.execute("SELECT pg_advisory_unlock(%s)", (_POLLING_LOCK_KEY,))
+        _polling_lock_connection.close()
+        logger.info("🔓 Combined-service ownership lock released")
+    except Exception:
+        logger.warning("Could not release combined-service ownership lock cleanly", exc_info=True)
+    finally:
+        _polling_lock_connection = None
 
 
 def _gateway_process():
@@ -35,6 +97,7 @@ def _health_ready(url: str) -> bool:
 
 
 def main():
+    _acquire_polling_lock(float(os.getenv("POLLING_LOCK_TIMEOUT", "120")))
     try:
         multiprocessing.set_start_method("spawn")
     except RuntimeError:
@@ -80,6 +143,7 @@ def main():
         if gateway.is_alive():
             gateway.terminate()
             gateway.join(timeout=10)
+        _release_polling_lock()
         raise SystemExit(0)
 
     signal.signal(signal.SIGTERM, shutdown)
