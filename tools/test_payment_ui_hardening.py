@@ -41,6 +41,8 @@ assert '"deposit_submit_error"' in bot_content
 bot_env = render.split('name: kelembingo-bots', 1)[1]
 assert '- key: INTERNAL_API_KEY\n        sync: false' in bot_env
 assert 'your_internal_api_key_here' not in bot_env
+assert '- type: web\n    name: kelembingo-bots' in render
+assert 'schedule: "*/5 * * * *"' not in bot_env
 assert 'asyncio.create_task(_notify_admin_deposit_web' in admin_api
 assert 'asyncio.create_task(_notify_admin_withdrawal_web' in admin_api
 assert 'observePlayer' in context and 'playerApi.reconcile' in context
