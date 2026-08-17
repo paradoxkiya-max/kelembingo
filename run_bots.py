@@ -134,14 +134,20 @@ if __name__ == "__main__":
     except RuntimeError:
         pass
 
-    # The gateway service owns the DB, game loop and API; it must never poll Telegram.
-    if os.getenv("RENDER_API_ONLY", "false").lower() == "true":
-        logger.info("🔀 RENDER_API_ONLY=true detected — running as Gateway API service, not bots.")
+    USE_GATEWAY = os.getenv("USE_GATEWAY", "false").lower() == "true"
+    RENDER_API_ONLY = os.getenv("RENDER_API_ONLY", "false").lower() == "true"
+
+    # USE_GATEWAY=true explicitly identifies the Telegram bot service: it uses
+    # the remote gateway DB but must still poll Telegram. Only a service with
+    # RENDER_API_ONLY=true and USE_GATEWAY=false delegates to the gateway.
+    if RENDER_API_ONLY and not USE_GATEWAY:
+        logger.info("🔀 RENDER_API_ONLY=true and USE_GATEWAY=false — running as Gateway API service, not bots.")
         from run_gateway import main as gateway_main
         gateway_main()
         raise SystemExit(0)
+    if RENDER_API_ONLY and USE_GATEWAY:
+        logger.warning("⚠️ Both RENDER_API_ONLY and USE_GATEWAY are true; USE_GATEWAY takes precedence and bot polling will start.")
 
-    USE_GATEWAY = os.getenv("USE_GATEWAY", "false").lower() == "true"
     logger.info("🚀 Starting Kelem Bingo Bot Service...")
     processes = _start_configured_workers()
 
