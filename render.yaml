@@ -48,7 +48,7 @@ services:
   # Telegram long polling must have one owner. A cron definition can overlap
   # or restart polling workers and duplicate conversation replies.
   - type: web
-    name: kelembingo-bots
+    name: kelembingo
     runtime: docker
     plan: free
     dockerfilePath: ./Dockerfile.bot

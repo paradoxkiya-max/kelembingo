@@ -38,10 +38,10 @@ assert 'await asyncio.to_thread(create_deposit, db, deposit_data)' in bot
 assert 'await asyncio.to_thread(lambda: db.collection' in bot
 assert "get_bot_text('deposit_submit_error', db)" in bot
 assert '"deposit_submit_error"' in bot_content
-bot_env = render.split('name: kelembingo-bots', 1)[1]
+bot_env = render.split('# ── Bots:', 1)[1]
 assert '- key: INTERNAL_API_KEY\n        sync: false' in bot_env
 assert 'your_internal_api_key_here' not in bot_env
-assert '- type: web\n    name: kelembingo-bots' in render
+assert '- type: web\n    name: kelembingo' in render
 assert 'schedule: "*/5 * * * *"' not in bot_env
 assert 'asyncio.create_task(_notify_admin_deposit_web' in admin_api
 assert 'asyncio.create_task(_notify_admin_withdrawal_web' in admin_api
