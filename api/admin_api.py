@@ -177,6 +177,7 @@ ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "paradox")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "12345678")
 AUTH_SECRET = os.getenv("ADMIN_AUTH_SECRET") or os.getenv("INTERNAL_API_KEY") or _secrets.token_hex(32)
 INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
+BOT_SERVICE_ID = os.getenv("BOT_SERVICE_ID", "").strip()
 AUTH_TOKEN_TTL = int(os.getenv("ADMIN_AUTH_TTL_HOURS", "12")) * 3600
 PROTECTED_DB_COLLECTIONS = {"admins", "system", "settings", "bot_content"}
 PUBLIC_ADMIN_PATHS = {"/api/admin/login"}
@@ -341,6 +342,15 @@ def _require_internal(request: Request) -> dict:
     identity = _auth_ok(request)
     if not identity or identity.get("role") != "internal":
         raise HTTPException(status_code=403, detail="Internal service access required")
+    return identity
+
+
+def _require_bot_service(request: Request) -> dict:
+    """Require the internal key plus the explicitly authorized bot service identity."""
+    identity = _require_internal(request)
+    service_id = request.headers.get("x-bot-service-id", "").strip()
+    if not BOT_SERVICE_ID or not service_id or not hmac.compare_digest(service_id, BOT_SERVICE_ID):
+        raise HTTPException(status_code=403, detail="Authorized bot service required")
     return identity
 
 
@@ -2023,7 +2033,7 @@ class InternalRegisterRequest(BaseModel):
 @app.post("/api/internal/accounts/transfer")
 async def internal_transfer_funds(req: InternalTransferRequest, request: Request):
     """Transfer play-wallet value atomically between two users."""
-    _require_internal(request)
+    _require_bot_service(request)
     if not req.idempotency_key:
         raise HTTPException(status_code=400, detail="idempotency_key_required")
     from settlement import transfer_funds
@@ -2043,7 +2053,7 @@ async def internal_transfer_funds(req: InternalTransferRequest, request: Request
 @app.post("/api/internal/accounts/convert-bonus")
 async def internal_convert_bonus(req: InternalBonusConversionRequest, request: Request):
     """Convert bonus coins into play-wallet value atomically."""
-    _require_internal(request)
+    _require_bot_service(request)
     from settlement import convert_bonus
     result = await _db(lambda: convert_bonus(
         db,
@@ -2059,7 +2069,7 @@ async def internal_convert_bonus(req: InternalBonusConversionRequest, request: R
 @app.post("/api/internal/accounts/register")
 async def internal_register_user(req: InternalRegisterRequest, request: Request):
     """Register a user and award the welcome bonus at most once."""
-    _require_internal(request)
+    _require_bot_service(request)
     if not req.name.strip() or not req.phone.strip():
         raise HTTPException(status_code=400, detail="name_and_phone_required")
     from settlement import register_user
@@ -2079,7 +2089,7 @@ async def internal_register_user(req: InternalRegisterRequest, request: Request)
 @app.post("/api/internal/withdrawals/create")
 async def internal_create_withdrawal(req: InternalWithdrawalCreateRequest, request: Request):
     """Debit and create one pending withdrawal on the gateway database."""
-    _require_internal(request)
+    _require_bot_service(request)
     from settlement import create_withdrawal
     data = {
         "userId": str(req.user_id),
@@ -2107,7 +2117,7 @@ async def internal_create_withdrawal(req: InternalWithdrawalCreateRequest, reque
 @app.post("/api/internal/deposits/create")
 async def internal_create_deposit(req: InternalDepositCreateRequest, request: Request):
     """Create a pending deposit exactly once on the gateway database."""
-    _require_internal(request)
+    _require_bot_service(request)
     from settlement import create_deposit
     data = {
         "userId": str(req.user_id),
@@ -2135,7 +2145,7 @@ async def internal_create_deposit(req: InternalDepositCreateRequest, request: Re
 @app.post("/api/internal/settlements/deposits/{deposit_id}/{status}")
 async def internal_settle_deposit(deposit_id: str, status: str, request: Request, note: str = ""):
     """Atomically settle a deposit for the bot service."""
-    _require_internal(request)
+    _require_bot_service(request)
     if status not in {"approved", "rejected"}:
         raise HTTPException(status_code=400, detail="Invalid deposit status")
     from settlement import settle_deposit
@@ -2151,7 +2161,7 @@ async def internal_settle_deposit(deposit_id: str, status: str, request: Request
 @app.post("/api/internal/settlements/withdrawals/{withdrawal_id}/{status}")
 async def internal_settle_withdrawal(withdrawal_id: str, status: str, request: Request, note: str = ""):
     """Atomically settle a withdrawal for the bot service."""
-    _require_internal(request)
+    _require_bot_service(request)
     if status not in {"approved", "rejected"}:
         raise HTTPException(status_code=400, detail="Invalid withdrawal status")
     from settlement import settle_withdrawal

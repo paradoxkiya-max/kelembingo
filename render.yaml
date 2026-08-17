@@ -28,6 +28,8 @@ services:
         sync: false
       - key: INTERNAL_API_KEY
         sync: false
+      - key: BOT_SERVICE_ID
+        value: kelembingo-bot-prod
       - key: BOT_TOKEN
         sync: false
       - key: ADMIN_BOT_TOKEN
@@ -70,6 +72,8 @@ services:
       # the gateway service INTERNAL_API_KEY. Never commit a placeholder value.
       - key: INTERNAL_API_KEY
         sync: false
+      - key: BOT_SERVICE_ID
+        value: kelembingo-bot-prod
       - key: BOT_TOKEN
         value: your_bot_token_here
       - key: ADMIN_BOT_TOKEN
