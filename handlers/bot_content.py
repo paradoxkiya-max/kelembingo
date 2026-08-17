@@ -129,6 +129,26 @@ DEFAULTS = {
 }
 
 
+def preload_bot_content(db=None) -> int:
+    """Warm the local message cache with one gateway/database read at startup."""
+    if not db:
+        return 0
+    loaded = 0
+    try:
+        for doc in db.collection('bot_content').get():
+            data = doc.to_dict() or {}
+            key = str(data.get('key') or doc.id or '')
+            text = data.get('content', '')
+            if key and text:
+                _cache[key] = (text, time.time() + _cache_ttl)
+                loaded += 1
+    except Exception as exc:
+        logger.warning("Could not preload bot content: %s", exc)
+    if loaded:
+        logger.info("⚡ Preloaded %d bot-content messages", loaded)
+    return loaded
+
+
 def get_bot_text(key: str, db=None, **kwargs) -> str:
     """
     Get a bot message by key. Uses Firestore cache with TTL.

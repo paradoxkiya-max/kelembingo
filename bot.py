@@ -24,7 +24,7 @@ from config import (
 )
 from telegram import Bot
 from handlers.user_manager import UserManager
-from handlers.bot_content import get_bot_text, invalidate_cache, get_config_value
+from handlers.bot_content import get_bot_text, invalidate_cache, get_config_value, preload_bot_content
 from firestore_db import FieldFilter, Increment
 
 logging.basicConfig(level=logging.INFO)
@@ -1088,13 +1088,13 @@ def main():
         await b.set_my_commands(commands)
         logger.info("✅ Bot commands registered in Telegram menu")
 
-        await _aio.sleep(5)
         me = await b.get_me()
         logger.info(f"✅ Game bot connected: @{me.username}")
 
-    _asyncio.run(_pre_start())
-
+        _asyncio.run(_pre_start())
+    preload_bot_content(db)
     app = Application.builder().token(BOT_TOKEN).read_timeout(30).write_timeout(30).connect_timeout(30).pool_timeout(30).build()
+
 
     # ─── /start ───
     app.add_handler(CommandHandler("start", start))

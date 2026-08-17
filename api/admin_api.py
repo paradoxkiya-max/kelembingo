@@ -2667,9 +2667,12 @@ async def _event_broadcast_loop():
                 last_created_at,
                 last_event_id,
             )
+            latest_events = {}
             for ev in events:
                 last_created_at = ev.created_at
                 last_event_id = ev.id
+                latest_events[(ev.collection, ev.doc_id)] = ev
+            for ev in latest_events.values():
                 try:
                     await broadcast_event(ev.collection, ev.doc_id)
                 except Exception as ev_err:
