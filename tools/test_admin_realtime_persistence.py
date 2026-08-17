@@ -10,6 +10,12 @@ assert "realtimeRevision" in context
 assert "subscribeCollection" in realtime and "admin_token" in realtime
 assert "useCallback" in dashboard and "useRef" in dashboard
 assert "const loadVersion = useRef(0)" in dashboard
+assert 'type LoadScope = "overview" | "users" | "payments" | "backup" | "none"' in dashboard
+assert 'requests.push(adminApi.dashboard(), adminApi.rounds(), adminApi.status())' in dashboard
+assert 'requests.push(adminApi.users())' in dashboard
+assert 'requests.push(adminApi.deposits(), adminApi.withdrawals(), adminApi.status())' in dashboard
+assert 'requests.push(adminApi.backupStatus())' in dashboard
+assert 'const activeLoadScope = useMemo<LoadScope>' in dashboard
 assert "if (version !== loadVersion.current) return" in dashboard
 assert "realtimeRevision === 0 ? 0 : 180" in dashboard
 assert "const [isRefreshing, setIsRefreshing] = useState(false)" in dashboard
