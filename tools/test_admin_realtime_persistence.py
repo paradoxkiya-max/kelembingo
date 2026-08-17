@@ -17,15 +17,18 @@ assert 'requests.push(adminApi.deposits(), adminApi.withdrawals(), adminApi.stat
 assert 'requests.push(adminApi.backupStatus())' in dashboard
 assert 'const activeLoadScope = useMemo<LoadScope>' in dashboard
 assert "if (version !== loadVersion.current) return" in dashboard
-assert "realtimeRevision === 0 ? 0 : 180" in dashboard
+assert "setRealtimeCollections" in context and "pendingCollections" in context
+assert "realtimeRevision === 0" in dashboard
+assert "hasRelevantRealtimeChange" in dashboard
+assert "const relevantCollections = useMemo" in dashboard
 assert "const [isRefreshing, setIsRefreshing] = useState(false)" in dashboard
 assert "{loading ? <Loading />" not in dashboard
 assert "{error ? <State" not in dashboard
 assert "Updating live data" in dashboard and "Retry live sync" in dashboard
 assert "}, []);" in dashboard
-assert "<CartelasSection refreshToken={realtimeRevision} />" in dashboard
-assert "<SettingsSection refreshToken={realtimeRevision} />" in dashboard
-assert "<BotContentSection refreshToken={realtimeRevision} />" in dashboard
+assert "<CartelasSection refreshToken={sectionRefreshToken} />" in dashboard
+assert "<SettingsSection refreshToken={sectionRefreshToken} />" in dashboard
+assert "<BotContentSection refreshToken={sectionRefreshToken} />" in dashboard
 assert "key={`cartelas-${realtimeRevision}`}" not in dashboard
 assert "key={`settings-${realtimeRevision}`}" not in dashboard
 assert "key={`botcontent-${realtimeRevision}`}" not in dashboard

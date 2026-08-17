@@ -205,7 +205,9 @@ export function observePlayerPayments(userId: string, listener: () => void) {
   return roomManager.subscribeDocument("payments", userId, () => listener());
 }
 
-export function observeAdminCollections(collections: string[], listener: () => void) {
-  const unsubscribes = collections.map((collection) => roomManager.subscribeCollection(collection, listener));
+export function observeAdminCollections(collections: string[], listener: (message: SnapshotMessage) => void) {
+  const unsubscribes = collections.map((collection) => roomManager.subscribeCollection(collection, (message) => {
+    if (message.collection === collection) listener(message);
+  }));
   return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
 }
