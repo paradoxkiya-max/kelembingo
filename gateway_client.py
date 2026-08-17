@@ -466,10 +466,9 @@ class GatewayClient:
 
     def __init__(self, gateway_url: str = None, api_key: str = None):
         self.gateway_url = (
-            gateway_url or os.getenv("GATEWAY_URL", "https://kelembingo-sqnv-y8ry.onrender.com")
+            gateway_url or os.getenv("GATEWAY_URL", "https://kelembingo-sqnv.onrender.com")
         ).rstrip("/")
         self.api_key = api_key or os.getenv("INTERNAL_API_KEY", "")
-        self.bot_service_id = os.getenv("BOT_SERVICE_ID", "").strip()
         self.cache = CacheStore(
             max_entries=int(os.getenv("GATEWAY_CACHE_MAX_ENTRIES", "2000")),
             log_interval=int(os.getenv("GATEWAY_CACHE_LOG_INTERVAL", "500")),
@@ -493,12 +492,6 @@ class GatewayClient:
     def cache_stats(self):
         return self.cache.stats()
 
-    def _internal_headers(self) -> dict:
-        headers = {"Content-Type": "application/json", "X-Internal-Key": self.api_key}
-        if self.bot_service_id:
-            headers["X-Bot-Service-ID"] = self.bot_service_id
-        return headers
-
     def is_gateway_down(self) -> bool:
         """True if the most recent request to the gateway failed with a network/5xx error."""
         return is_gateway_down()
@@ -510,7 +503,7 @@ class GatewayClient:
         response = _request_with_retry(
             "POST",
             f"{self.gateway_url}{path}",
-            headers=self._internal_headers(),
+            headers={"Content-Type": "application/json", "X-Internal-Key": self.api_key},
             timeout=20,
         )
         try:
@@ -526,7 +519,7 @@ class GatewayClient:
             "POST",
             f"{self.gateway_url}{path}",
             json=payload,
-            headers=self._internal_headers(),
+            headers={"Content-Type": "application/json", "X-Internal-Key": self.api_key},
             timeout=20,
         )
         try:
@@ -569,7 +562,7 @@ class GatewayClient:
             "POST",
             f"{self.gateway_url}/api/internal/withdrawals/create",
             json=payload,
-            headers=self._internal_headers(),
+            headers={"Content-Type": "application/json", "X-Internal-Key": self.api_key},
             timeout=20,
         )
         try:
@@ -585,7 +578,7 @@ class GatewayClient:
             "POST",
             f"{self.gateway_url}/api/internal/deposits/create",
             json=deposit_data,
-            headers=self._internal_headers(),
+            headers={"Content-Type": "application/json", "X-Internal-Key": self.api_key},
             timeout=20,
         )
         try:
