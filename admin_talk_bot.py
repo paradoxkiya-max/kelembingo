@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 
 from config import db, BOT_TOKEN
 
-# Dedicated Admin Talk Bot Token (fallback to ADMIN_BOT_TOKEN if missing)
-ADMIN_TALK_BOT_TOKEN = os.getenv("ADMIN_TALK_BOT_TOKEN", os.getenv("ADMIN_BOT_TOKEN", ""))
+# Dedicated Admin Talk Bot Token; never fall back to another bot token.
+ADMIN_TALK_BOT_TOKEN = os.getenv("ADMIN_TALK_BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 
 

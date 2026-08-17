@@ -14,4 +14,5 @@ COPY . .
 
 EXPOSE 8000
 
-CMD ["python", "run_bots.py"]
+# The default image is gateway-only. Telegram polling is opt-in via Dockerfile.bot.
+CMD ["python", "run_gateway.py"]

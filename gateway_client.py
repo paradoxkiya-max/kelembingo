@@ -518,7 +518,7 @@ class GatewayClient:
         response = _request_with_retry(
             "POST",
             f"{self.gateway_url}{path}",
-            json=payload,
+            json=_prepare_data_for_json(payload),
             headers={"Content-Type": "application/json", "X-Internal-Key": self.api_key},
             timeout=20,
         )
@@ -555,7 +555,7 @@ class GatewayClient:
         })
 
     def create_withdrawal(self, withdrawal_data: dict, idempotency_key: str = None) -> dict:
-        payload = dict(withdrawal_data)
+        payload = _prepare_data_for_json(withdrawal_data)
         if idempotency_key:
             payload["idempotencyKey"] = idempotency_key
         response = _request_with_retry(

@@ -27,8 +27,15 @@ logger = logging.getLogger(__name__)
 
 import os
 
-SUPPORT_BOT_TOKEN = os.getenv("SUPPORT_BOT_TOKEN", "")
-ADMIN_SUPPORT_BOT_TOKEN = os.getenv("ADMIN_SUPPORT_BOT_TOKEN", "")
+def _token_from_env(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if not value or value.lower().startswith(("your_", "placeholder", "replace_")):
+        return ""
+    return value
+
+
+SUPPORT_BOT_TOKEN = _token_from_env("SUPPORT_BOT_TOKEN")
+ADMIN_SUPPORT_BOT_TOKEN = _token_from_env("ADMIN_SUPPORT_BOT_TOKEN")
 
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 

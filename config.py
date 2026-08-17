@@ -30,9 +30,16 @@ sys.modules["firebase_admin"] = firebase_admin_mock
 sys.modules["firebase_admin.credentials"] = credentials_mock
 sys.modules["firebase_admin.firestore"] = firestore_mock
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
-ADMIN_BOT_TOKEN = os.getenv("ADMIN_BOT_TOKEN")
+def _token_from_env(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if not value or value.lower().startswith(("your_", "placeholder", "replace_")):
+        return ""
+    return value
+
+
+BOT_TOKEN = _token_from_env("BOT_TOKEN")
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "").strip()
+ADMIN_BOT_TOKEN = _token_from_env("ADMIN_BOT_TOKEN")
 
 if BOT_TOKEN and ADMIN_BOT_TOKEN and BOT_TOKEN.strip() == ADMIN_BOT_TOKEN.strip():
     logger.error("=" * 80)

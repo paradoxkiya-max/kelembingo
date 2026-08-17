@@ -44,20 +44,21 @@ def _read_user_sync(user_id: int):
     return snap.to_dict() if snap.exists else None
 
 
-ALLOWED_ORIGINS = [
-    "*",
+FRONTEND_ORIGIN = os.getenv(
+    "FRONTEND_URL",
     "https://kelembingo-frontend-i8yy.onrender.com",
+).rstrip("/")
+ALLOWED_ORIGINS = [
+    FRONTEND_ORIGIN,
     "https://kelembingo-sqnv.onrender.com",
+    "http://localhost:5173",
+    "http://localhost:3000",
 ]
-
-# Additional origins that match by suffix
-ALLOWED_ORIGIN_SUFFIXES = [
-    ".onrender.com",
-]
+ALLOWED_ORIGIN_SUFFIXES = []
 
 
 # ─── Socket.IO Server ───
-sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
+sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins=ALLOWED_ORIGINS)
 
 app = FastAPI(title="Kelem Bingo Admin API", version="2.0.0")
 
@@ -148,9 +149,9 @@ user_manager = UserManager(db)
 MAX_SMART_CALLS = GAME_LENGTH_RANGE[1]
 
 # ─── Auth (C1) ───
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "paradox")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "12345678")
-AUTH_SECRET = os.getenv("ADMIN_AUTH_SECRET") or os.getenv("INTERNAL_API_KEY") or _secrets.token_hex(32)
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "").strip()
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "").strip()
+AUTH_SECRET = os.getenv("ADMIN_AUTH_SECRET", "").strip() or _secrets.token_hex(32)
 INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
 AUTH_TOKEN_TTL = int(os.getenv("ADMIN_AUTH_TTL_HOURS", "12")) * 3600
 PROTECTED_DB_COLLECTIONS = {"admins", "system", "settings", "bot_content"}
@@ -212,7 +213,7 @@ def _auth_ok(request: Request) -> Optional[dict]:
     auth = request.headers.get("authorization", "")
     if auth.lower().startswith("bearer "):
         admin = _verify_token(auth[7:].strip())
-        if admin:
+        if admin and admin.get("role") in {"admin", "super_admin", "internal"}:
             return admin
     return None
 
@@ -532,9 +533,11 @@ async def auth_middleware(request: Request, call_next):
     if method == "OPTIONS":
         return await call_next(request)
 
+    requires_admin = False
     if path.startswith("/api/admin"):
         if path not in PUBLIC_ADMIN_PATHS:
             needs_auth = True
+            requires_admin = True
     elif path.startswith("/api/rounds") and method in ("POST", "PUT", "DELETE"):
         if path.endswith(("/start", "/call", "/end")):
             needs_auth = True
@@ -562,7 +565,7 @@ async def auth_middleware(request: Request, call_next):
             content={"detail": "Database is still initializing; try again shortly.", "ready": False},
         )
     if needs_auth:
-        identity = _auth_any(request)
+        identity = _auth_ok(request) if requires_admin else _auth_any(request)
         if not identity:
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
 
@@ -2695,111 +2698,9 @@ def _fetch_events(last_created_at=None, last_event_id=None):
         sess.close()
 
 
-# ─── Remote Database Bridge Endpoints for GatewayClient ───
-def _serialize_db_dict(obj):
-    if isinstance(obj, (datetime, date)):
-        return obj.isoformat()
-    if isinstance(obj, dict):
-        return {k: _serialize_db_dict(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_serialize_db_dict(i) for i in obj]
-    return obj
-
-
-@app.get("/api/db/{collection}/{doc_id}")
-async def gateway_db_get_doc(collection: str, doc_id: str):
-    def _sync():
-        ref = db.collection(collection).document(doc_id)
-        snap = ref.get()
-        if snap.exists:
-            return {"id": snap.id, "data": _serialize_db_dict(snap.to_dict()), "exists": True}
-        return None
-    res = await asyncio.to_thread(_sync)
-    if res is None:
-        return Response(status_code=404, content=json.dumps({"exists": False}), media_type="application/json")
-    return JSONResponse(res)
-
-
-@app.post("/api/db/{collection}/{doc_id}")
-async def gateway_db_set_doc(collection: str, doc_id: str, payload: dict = Body(...), request: Request = None):
-    identity = _authorize_db_write(request, collection, doc_id)
-    if identity.get("kind") == "player":
-        payload = {**payload}
-        data = _sanitize_player_user_data(payload.get("data", {}))
-        payload["data"] = data
-        payload["merge"] = True
-
-    def _sync():
-        data = payload.get("data", {})
-        merge = payload.get("merge", False)
-        # Parse ISO datetimes if present in payload
-        ref = db.collection(collection).document(doc_id)
-        ref.set(data, merge=merge)
-        return {"status": "ok"}
-    await asyncio.to_thread(_sync)
-    return {"status": "ok"}
-
-
-@app.patch("/api/db/{collection}/{doc_id}")
-async def gateway_db_update_doc(collection: str, doc_id: str, payload: dict = Body(...), request: Request = None):
-    identity = _authorize_db_write(request, collection, doc_id)
-    if identity.get("kind") == "player":
-        payload = {**payload}
-        payload["data"] = _sanitize_player_user_data(payload.get("data", {}))
-
-    def _sync():
-        data = payload.get("data", {})
-        ref = db.collection(collection).document(doc_id)
-        # Handle special Increment field operations if passed as dict
-        parsed_data = {}
-        for k, v in data.items():
-            if isinstance(v, dict) and v.get("_type") == "Increment":
-                parsed_data[k] = Increment(v.get("value", 0))
-            else:
-                parsed_data[k] = v
-        ref.update(parsed_data)
-        return {"status": "ok"}
-    await asyncio.to_thread(_sync)
-    return {"status": "ok"}
-
-
-@app.delete("/api/db/{collection}/{doc_id}")
-async def gateway_db_delete_doc(collection: str, doc_id: str, request: Request):
-    _authorize_db_write(request, collection, doc_id)
-
-    def _sync():
-        ref = db.collection(collection).document(doc_id)
-        ref.delete()
-    await asyncio.to_thread(_sync)
-    return {"status": "ok"}
-
-
-@app.get("/api/db/{collection}")
-async def gateway_db_query_collection(
-    collection: str,
-    filters: Optional[str] = None,
-    order_by: Optional[str] = None,
-    order_dir: Optional[str] = "ASCENDING",
-    limit_n: Optional[int] = None
-):
-    def _sync():
-        ref = db.collection(collection)
-        if filters:
-            try:
-                flist = json.loads(filters)
-                for f in flist:
-                    if len(f) == 3:
-                        ref = ref.where(f[0], f[1], f[2])
-            except Exception as e:
-                logger.warning(f"Error parsing query filters: {e}")
-        if order_by:
-            ref = ref.order_by(order_by, order_dir)
-        if limit_n:
-            ref = ref.limit(limit_n)
-        docs = list(ref.get())
-        return [{"id": d.id, "data": _serialize_db_dict(d.to_dict())} for d in docs]
-    res = await asyncio.to_thread(_sync)
-    return JSONResponse(res)
+# The canonical /api/db/* routes are defined above with the shared auth middleware.
+# Do not add a second bridge implementation here: duplicate route registration is
+# order-dependent and can silently bypass the intended request contract.
 
 
 # (startup merged into start_background_monitor above)

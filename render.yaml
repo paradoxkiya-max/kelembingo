@@ -22,6 +22,8 @@ services:
       # Additive reference-inspired room intents; set false for REST rollback.
       - key: ROOM_PROTOCOL_ENABLED
         value: "true"
+      - key: FRONTEND_URL
+        value: https://kelembingo-frontend-i8yy-9m27.onrender.com
       - key: DATABASE_URL
         sync: false
       - key: ADMIN_AUTH_SECRET
@@ -41,7 +43,7 @@ services:
       - key: BACKUP_CHAT_ID
         sync: false
       - key: ADMIN_USERNAME
-        value: "paradox"
+        sync: false
       - key: ADMIN_PASSWORD
         sync: false
     autoDeploy: true
@@ -75,17 +77,17 @@ services:
       - key: BOT_SERVICE_ID
         value: kelembingo-bot-prod
       - key: BOT_TOKEN
-        value: your_bot_token_here
+        sync: false
       - key: ADMIN_BOT_TOKEN
-        value: your_admin_bot_token_here
+        sync: false
       - key: PAYMENT_BOT_TOKEN
-        value: your_payment_bot_token_here
+        sync: false
       - key: ADMIN_CHAT_ID
         value: "8462274722"
       - key: ADMIN_TALK_BOT_TOKEN
-        value: your_admin_talk_bot_token_here
+        sync: false
       - key: SUPPORT_BOT_TOKEN
-        value: your_support_bot_token_here
+        sync: false
       - key: ADMIN_SUPPORT_BOT_TOKEN
-        value: your_admin_support_bot_token_here
+        sync: false
     autoDeploy: true

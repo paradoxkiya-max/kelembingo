@@ -1,11 +1,17 @@
-import os
 import logging
 import multiprocessing
+import os
 from dotenv import load_dotenv
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _configured_token(name: str) -> bool:
+    """Return True only for a real configured token, not a Blueprint placeholder."""
+    value = os.getenv(name, "").strip()
+    return bool(value) and not value.lower().startswith(("your_", "placeholder", "replace_"))
 
 
 def run_game_bot():
@@ -73,17 +79,53 @@ def auto_restore_on_startup():
 
 def run_health_check_server():
     from http.server import HTTPServer, BaseHTTPRequestHandler
+
     port = int(os.environ.get("PORT", 8000))
+
     class HealthHandler(BaseHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200)
-            self.send_header('Content-type', 'application/json')
+            self.send_header("Content-type", "application/json")
             self.end_headers()
             self.wfile.write(b'{"status": "ok", "service": "bots"}')
+
         def log_message(self, format, *args):
             return
-    server = HTTPServer(('0.0.0.0', port), HealthHandler)
+
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
     server.serve_forever()
+
+
+def _worker_specs():
+    return [
+        ("Game Bot", run_game_bot, "BOT_TOKEN"),
+        ("Admin Bot", run_admin_bot, "ADMIN_BOT_TOKEN"),
+        ("Support Bot", run_support_bot, "SUPPORT_BOT_TOKEN"),
+        ("Admin Support Bot", run_admin_support_bot, "ADMIN_SUPPORT_BOT_TOKEN"),
+        ("Admin Talk Bot", run_admin_talk_bot, "ADMIN_TALK_BOT_TOKEN"),
+    ]
+
+
+def _start_configured_workers():
+    processes = []
+    for label, target, token_name in _worker_specs():
+        if not _configured_token(token_name):
+            logger.info("⏭️ %s disabled: %s is not configured", label, token_name)
+            continue
+        process = multiprocessing.Process(target=target, name=label.replace(" ", ""))
+        process.start()
+        processes.append(process)
+        logger.info("✅ %s started", label)
+    if not processes:
+        logger.error("🛑 No bot tokens are configured; no Telegram polling workers were started.")
+    return processes
+
+
+def _stop_workers(processes):
+    for process in processes:
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
 
 
 if __name__ == "__main__":
@@ -92,10 +134,7 @@ if __name__ == "__main__":
     except RuntimeError:
         pass
 
-    # The gateway service is flagged with RENDER_API_ONLY=true (it owns the DB,
-    # game loop and API — it must never start Telegram bots). If this entrypoint
-    # is invoked on that service (e.g. the wrong Dockerfile was picked), delegate
-    # to the real gateway entrypoint instead of running bots.
+    # The gateway service owns the DB, game loop and API; it must never poll Telegram.
     if os.getenv("RENDER_API_ONLY", "false").lower() == "true":
         logger.info("🔀 RENDER_API_ONLY=true detected — running as Gateway API service, not bots.")
         from run_gateway import main as gateway_main
@@ -103,40 +142,20 @@ if __name__ == "__main__":
         raise SystemExit(0)
 
     USE_GATEWAY = os.getenv("USE_GATEWAY", "false").lower() == "true"
-
     logger.info("🚀 Starting Kelem Bingo Bot Service...")
+    processes = _start_configured_workers()
 
-    # In gateway mode the GATEWAY service owns the live DB. The bots' local DB
-    # is vestigial, so skip restoring it. Backups are manual-only and run on
-    # the gateway via POST /api/admin/backup/create.
-
-    game_proc = multiprocessing.Process(target=run_game_bot, name="GameBot")
-    admin_proc = multiprocessing.Process(target=run_admin_bot, name="AdminBot")
-    support_proc = multiprocessing.Process(target=run_support_bot, name="SupportBot")
-    admin_support_proc = multiprocessing.Process(target=run_admin_support_bot, name="AdminSupportBot")
-    admin_talk_proc = multiprocessing.Process(target=run_admin_talk_bot, name="AdminTalkBot")
-
-    game_proc.start()
-    logger.info("✅ Game Bot started")
-    admin_proc.start()
-    logger.info("✅ Admin Bot started")
-    support_proc.start()
-    logger.info("✅ Support Bot started")
-    admin_support_proc.start()
-    logger.info("✅ Admin Support Bot started")
-    admin_talk_proc.start()
-    logger.info("✅ Admin Talk Bot started")
     if USE_GATEWAY:
-        logger.info("🌐 Dedicated Bot Service running with Gateway bridge (port %s)...", os.environ.get("PORT", "8000"))
+        logger.info(
+            "🌐 Dedicated Bot Service running with Gateway bridge (port %s)...",
+            os.environ.get("PORT", "8000"),
+        )
         try:
             run_health_check_server()
         except KeyboardInterrupt:
             logger.info("🛑 Shutting down...")
         finally:
-            for proc in (game_proc, admin_proc, support_proc, admin_support_proc, admin_talk_proc):
-                if proc.is_alive():
-                    proc.terminate()
-                    proc.join(timeout=5)
+            _stop_workers(processes)
     else:
         logger.info("✅ Starting API Server and Game Loop...")
         try:
@@ -144,7 +163,4 @@ if __name__ == "__main__":
         except KeyboardInterrupt:
             logger.info("🛑 Shutting down...")
         finally:
-            for proc in (game_proc, admin_proc, support_proc, admin_support_proc, admin_talk_proc):
-                if proc.is_alive():
-                    proc.terminate()
-                    proc.join(timeout=5)
+            _stop_workers(processes)
