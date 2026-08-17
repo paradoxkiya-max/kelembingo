@@ -1,6 +1,6 @@
 // Style reminder: keep the gateway layer invisible to the UI; preserve the legacy player-token and API contract.
 
-export const GATEWAY_URL = (import.meta.env.VITE_GATEWAY_URL || "https://kelembingo-sqnv.onrender.com").replace(/\/$/, "");
+export const GATEWAY_URL = (import.meta.env.VITE_GATEWAY_URL || "https://kelembingo-sqnv-y8ry.onrender.com").replace(/\/$/, "");
 
 export type GatewayError = Error & { status?: number; code?: string };
 

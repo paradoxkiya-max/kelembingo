@@ -10,7 +10,7 @@ After merge commit `4bb0938`, Render auto-deploy failed before the build because
 
 The settings were updated through the authenticated browser. Render accepted `dashboard-react`, `pnpm install --frozen-lockfile && pnpm build`, and `dist/public`, then started a new deployment for main commit `4bb0938`. The deployment was in `Building` state and had reached dependency installation when last observed.
 
-The corrected deployment completed its Vite build and Render reported `Your site is live`. The public URL `https://kelembingo-frontend-i8yy.onrender.com/` now serves the React KelemBingo shell with home, History, Wallet, and Profile navigation, live public statistics, and Telegram-authentication messaging.
+The corrected deployment completed its Vite build and Render reported `Your site is live`. The public URL `https://kelembingo-frontend-i8yy-9m27.onrender.com/` now serves the React KelemBingo shell with home, History, Wallet, and Profile navigation, live public statistics, and Telegram-authentication messaging.
 
 Initial route probing showed `/history`, `/wallet`, `/profile`, and `/admin` returned 404 because the Render static service had no SPA fallback. The Redirects/Rewrites editor is prepared with source `/*`, destination `/index.html`, and action `Rewrite`; this must be saved before direct-route verification can pass.
 

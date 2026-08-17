@@ -69,8 +69,8 @@ def _selection_deadline_expired(round_data: dict, now: Optional[datetime] = None
 
 ALLOWED_ORIGINS = [
     "*",
-    "https://kelembingo-frontend-i8yy.onrender.com",
-    "https://kelembingo-sqnv.onrender.com",
+    "https://kelembingo-frontend-i8yy-9m27.onrender.com",
+    "https://kelembingo-sqnv-y8ry.onrender.com",
 ]
 
 # Additional origins that match by suffix
