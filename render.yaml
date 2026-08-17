@@ -66,8 +66,10 @@ services:
         value: https://kelembingo-sqnv-y8ry.onrender.com
       - key: WEBAPP_URL
         value: https://kelembingo-frontend-i8yy-9m27.onrender.com/
+      # Set this secret in the bot service dashboard; it must exactly match
+      # the gateway service INTERNAL_API_KEY. Never commit a placeholder value.
       - key: INTERNAL_API_KEY
-        value: your_internal_api_key_here
+        sync: false
       - key: BOT_TOKEN
         value: your_bot_token_here
       - key: ADMIN_BOT_TOKEN

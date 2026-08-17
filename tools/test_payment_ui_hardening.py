@@ -6,6 +6,7 @@ gateway = (ROOT / 'dashboard-react/client/src/lib/gateway.ts').read_text()
 admin_api = (ROOT / 'api/admin_api.py').read_text()
 bot = (ROOT / 'bot.py').read_text()
 bot_content = (ROOT / 'handlers/bot_content.py').read_text()
+render = (ROOT / 'render.yaml').read_text()
 context = (ROOT / 'dashboard-react/client/src/contexts/PlayerContext.tsx').read_text()
 realtime = (ROOT / 'dashboard-react/client/src/lib/realtime.ts').read_text()
 
@@ -37,6 +38,9 @@ assert 'await asyncio.to_thread(create_deposit, db, deposit_data)' in bot
 assert 'await asyncio.to_thread(lambda: db.collection' in bot
 assert "get_bot_text('deposit_submit_error', db)" in bot
 assert '"deposit_submit_error"' in bot_content
+bot_env = render.split('name: kelembingo-bots', 1)[1]
+assert '- key: INTERNAL_API_KEY\n        sync: false' in bot_env
+assert 'your_internal_api_key_here' not in bot_env
 assert 'asyncio.create_task(_notify_admin_deposit_web' in admin_api
 assert 'asyncio.create_task(_notify_admin_withdrawal_web' in admin_api
 assert 'observePlayer' in context and 'playerApi.reconcile' in context
