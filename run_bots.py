@@ -1,4 +1,6 @@
 import logging
+import fcntl
+import hashlib
 import multiprocessing
 import os
 from dotenv import load_dotenv
@@ -12,6 +14,31 @@ def _configured_token(name: str) -> bool:
     """Return True only for a real configured token, not a Blueprint placeholder."""
     value = os.getenv(name, "").strip()
     return bool(value) and not value.lower().startswith(("your_", "placeholder", "replace_"))
+
+
+def _worker_lock_path(token_name: str) -> str:
+    token = os.getenv(token_name, "").strip().encode("utf-8")
+    token_hash = hashlib.sha256(token).hexdigest()[:16]
+    return f"/tmp/kelembingo-poll-{token_name.lower()}-{token_hash}.lock"
+
+
+def _run_owned_worker(target, token_name: str):
+    """Run one bot only if this process owns that token's local lock."""
+    lock_path = _worker_lock_path(token_name)
+    lock_handle = open(lock_path, "w")
+    try:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        logger.error("🛑 Duplicate local polling owner refused for %s", token_name)
+        lock_handle.close()
+        return
+
+    logger.info("🔐 Polling worker owner acquired: %s (pid=%s)", token_name, os.getpid())
+    try:
+        target()
+    finally:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+        lock_handle.close()
 
 
 def run_game_bot():
@@ -112,7 +139,11 @@ def _start_configured_workers():
         if not _configured_token(token_name):
             logger.info("⏭️ %s disabled: %s is not configured", label, token_name)
             continue
-        process = multiprocessing.Process(target=target, name=label.replace(" ", ""))
+        process = multiprocessing.Process(
+            target=_run_owned_worker,
+            args=(target, token_name),
+            name=label.replace(" ", ""),
+        )
         process.start()
         processes.append(process)
         logger.info("✅ %s started", label)
