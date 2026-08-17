@@ -76,7 +76,7 @@ export default function AdminDashboard() {
     if (section === "dashboard" || section === "games" || section === "reports") return "overview";
     return "none";
   }, [section]);
-  useEffect(() => { void load("overview"); }, [load]);
+  useEffect(() => { if (activeLoadScope === "overview") void load("overview"); }, [activeLoadScope, load]);
   useEffect(() => {
     if (realtimeRevision === 0 && activeLoadScope === "overview") return;
     const timer = window.setTimeout(() => void load(activeLoadScope), realtimeRevision === 0 ? 0 : 180);
