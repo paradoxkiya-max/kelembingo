@@ -335,7 +335,7 @@ async def deposit_txn_number(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.effective_message.reply_text(get_bot_text('deposit_invalid_number', db))
         return DEPOSIT_TXN_NUMBER
 
-    # Check admin online
+    # Check admin online without blocking the Telegram event loop.
     admin_online = await _is_admin_online()
     if not admin_online:
         await update.effective_message.reply_text(
@@ -349,7 +349,12 @@ async def deposit_txn_number(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     # Keep this quick duplicate check for a friendly response, but the shared
     # creator below is the authoritative atomic check for concurrent requests.
-    dup = db.collection('deposits').where('transactionId', '==', txn_number).limit(1).get()
+    try:
+        dup = await asyncio.to_thread(lambda: db.collection('deposits').where('transactionId', '==', txn_number).limit(1).get())
+    except Exception:
+        logger.exception("Deposit duplicate check failed for user %s", uid)
+        await update.effective_message.reply_text(get_bot_text('deposit_submit_error', db), reply_markup=MAIN_KEYBOARD)
+        return ConversationHandler.END
     if dup:
         await update.effective_message.reply_text(get_bot_text('deposit_duplicate_txn', db), reply_markup=MAIN_KEYBOARD)
         return ConversationHandler.END
@@ -368,7 +373,14 @@ async def deposit_txn_number(update: Update, context: ContextTypes.DEFAULT_TYPE)
         'adminNote': '',
     }
     from settlement import create_deposit
-    created = create_deposit(db, deposit_data)
+    try:
+        # GatewayClient performs synchronous HTTP; keep it off the Telegram
+        # polling loop so the bot can continue receiving messages and callbacks.
+        created = await asyncio.to_thread(create_deposit, db, deposit_data)
+    except Exception:
+        logger.exception("Deposit creation request failed for user %s transaction %s", uid, txn_number)
+        await update.effective_message.reply_text(get_bot_text('deposit_submit_error', db), reply_markup=MAIN_KEYBOARD)
+        return ConversationHandler.END
     if not created.get("ok"):
         await update.effective_message.reply_text(get_bot_text('deposit_duplicate_txn', db), reply_markup=MAIN_KEYBOARD)
         return ConversationHandler.END
