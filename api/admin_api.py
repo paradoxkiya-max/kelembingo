@@ -46,14 +46,15 @@ def _read_user_sync(user_id: int):
 
 FRONTEND_ORIGIN = os.getenv(
     "FRONTEND_URL",
-    "https://kelembingo-frontend-i8yy.onrender.com",
+    "https://kelembingo-frontend-i8yy-9m27.onrender.com",
 ).rstrip("/")
-ALLOWED_ORIGINS = [
+ALLOWED_ORIGINS = list(dict.fromkeys([
     FRONTEND_ORIGIN,
+    "https://kelembingo-frontend-i8yy-9m27.onrender.com",
     "https://kelembingo-ncqv.onrender.com",
     "http://localhost:5173",
     "http://localhost:3000",
-]
+]))
 ALLOWED_ORIGIN_SUFFIXES = []
 
 

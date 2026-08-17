@@ -2,6 +2,7 @@ from firestore_db import FieldFilter, transactional as firestore_transactional
 from firestore_db import MockFirestoreClient
 from datetime import datetime, timezone
 from typing import Dict, Optional
+import asyncio
 import math
 
 
@@ -21,7 +22,7 @@ class UserManager:
         self.db = db
         self.users_ref = db.collection('users')
 
-    async def get_or_create_user(self, user_id: int, first_name: str, username: str) -> Dict:
+    def _get_or_create_user_sync(self, user_id: int, first_name: str, username: str) -> Dict:
         user_doc = self.users_ref.document(str(user_id)).get()
         if user_doc.exists:
             return user_doc.to_dict()
@@ -47,12 +48,20 @@ class UserManager:
         self.users_ref.document(str(user_id)).set(user_data)
         return user_data
 
-    async def get_user(self, user_id: int) -> Optional[Dict]:
+    async def get_or_create_user(self, user_id: int, first_name: str, username: str) -> Dict:
+        return await asyncio.to_thread(self._get_or_create_user_sync, user_id, first_name, username)
+
+    def _get_user_sync(self, user_id: int) -> Optional[Dict]:
         user_doc = self.users_ref.document(str(user_id)).get()
         return user_doc.to_dict() if user_doc.exists else None
 
+    async def get_user(self, user_id: int) -> Optional[Dict]:
+        return await asyncio.to_thread(self._get_user_sync, user_id)
+
     async def user_exists(self, user_id: int) -> bool:
-        return self.users_ref.document(str(user_id)).get().exists
+        return await asyncio.to_thread(
+            lambda: self.users_ref.document(str(user_id)).get().exists
+        )
 
     async def update_balance(self, user_id: int, amount: float) -> bool:
         user = await self.get_user(user_id)

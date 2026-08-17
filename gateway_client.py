@@ -21,6 +21,7 @@ import requests
 from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
+_http_session = requests.Session()
 
 
 class GatewayUnavailableError(Exception):
@@ -61,7 +62,7 @@ def _request_with_retry(method: str, url: str, *, json=None, headers=None, timeo
     last_exc = None
     for attempt in range(_MAX_RETRIES):
         try:
-            r = requests.request(method, url, json=json, headers=headers, timeout=timeout)
+            r = _http_session.request(method, url, json=json, headers=headers, timeout=timeout)
             if r.status_code < 500:
                 _set_gateway_down(False)
                 return r
