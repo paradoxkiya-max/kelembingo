@@ -50,7 +50,7 @@ FRONTEND_ORIGIN = os.getenv(
 ).rstrip("/")
 ALLOWED_ORIGINS = [
     FRONTEND_ORIGIN,
-    "https://kelembingo-sqnv.onrender.com",
+    "https://kelembingo-ncqv.onrender.com",
     "http://localhost:5173",
     "http://localhost:3000",
 ]

@@ -97,7 +97,6 @@ def _health_ready(url: str) -> bool:
 
 
 def main():
-    _acquire_polling_lock(float(os.getenv("POLLING_LOCK_TIMEOUT", "120")))
     try:
         multiprocessing.set_start_method("spawn")
     except RuntimeError:
@@ -127,6 +126,10 @@ def main():
             gateway.terminate()
             gateway.join(timeout=10)
         raise SystemExit(1)
+
+    # Keep the web port live while an overlapping deployment waits for the
+    # previous polling owner to release the Telegram ownership lock.
+    _acquire_polling_lock(float(os.getenv("POLLING_LOCK_TIMEOUT", "120")))
 
     # Bot children use the local gateway HTTP bridge while the gateway owns the
     # actual Supabase/PostgreSQL connection and game engine.
