@@ -63,6 +63,9 @@ services:
         value: "1"
       - key: USE_GATEWAY
         value: "true"
+      # Explicitly prevent this service from delegating to the gateway entrypoint.
+      - key: RENDER_API_ONLY
+        value: "false"
       # Safety guard if this service ever imports the API module.
       - key: GAME_ENGINE_ENABLED
         value: "false"

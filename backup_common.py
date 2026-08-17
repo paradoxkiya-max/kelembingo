@@ -241,6 +241,8 @@ def restore_if_empty() -> dict:
     Auto-restore used on startup: only restores when the DB has no documents,
     so a fresh (wiped) deploy is re-seeded but a live DB is never touched.
     """
+    if not BACKUP_BOT_TOKEN:
+        return {"restored": False, "reason": "backup_bot_token_not_configured"}
     if firestore_db.count_documents() > 0:
         return {"restored": False, "reason": "db_not_empty"}
     if not BACKUP_CHAT_ID:
