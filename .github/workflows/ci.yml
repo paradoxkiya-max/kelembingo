@@ -28,6 +28,7 @@ jobs:
           python tools/test_deposit_field_contract.py
           python tools/test_combined_service_ownership.py
           python tools/test_frontend_gateway_and_latency_contract.py
+          python tools/test_admin_realtime_contract.py
           python tools/test_security_and_worker_contract.py
           python tools/test_database_config_guard.py
           python tools/test_startup_readiness.py
