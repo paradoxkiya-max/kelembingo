@@ -1,96 +1,58 @@
 services:
-  # ── Gateway: API + Engine + SQLite ──
-  #
-  # SECURITY: all tokens below are placeholders. Real values are set in the
-  # Render dashboard (Environment) for each service and have been ROTATED after
-  # being leaked in an earlier commit. Do NOT commit real bot tokens.
+  # One service owns the gateway, Supabase/PostgreSQL connection, game engine,
+  # Socket.IO API, and all configured Telegram polling workers.
   - type: web
-    name: kelembingo-gateway
+    name: kelembingo
     runtime: docker
-    plan: free
-    dockerfilePath: ./Dockerfile.gateway
+    plan: starter
+    dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /api/health
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
-      - key: RENDER_API_ONLY
+      - key: COMBINED_SERVICE
         value: "true"
-      # Exactly one Render service must own round progression.
+      - key: USE_GATEWAY
+        value: "false"
+      - key: RENDER_API_ONLY
+        value: "false"
       - key: GAME_ENGINE_ENABLED
         value: "true"
-      # Additive reference-inspired room intents; set false for REST rollback.
       - key: ROOM_PROTOCOL_ENABLED
         value: "true"
-      - key: FRONTEND_URL
-        value: https://kelembingo-frontend-i8yy-9m27.onrender.com
       - key: DATABASE_URL
         sync: false
-      - key: ADMIN_AUTH_SECRET
-        sync: false
+      - key: FRONTEND_URL
+        value: https://kelembingo-frontend-i8yy-9m27.onrender.com
+      - key: WEBAPP_URL
+        value: https://kelembingo-frontend-i8yy-9m27.onrender.com/
       - key: INTERNAL_API_KEY
         sync: false
       - key: BOT_SERVICE_ID
-        value: kelembingo-bot-prod
-      - key: BOT_TOKEN
-        sync: false
-      - key: ADMIN_BOT_TOKEN
-        sync: false
-      - key: ADMIN_CHAT_ID
-        sync: false
-      - key: BACKUP_BOT_TOKEN
-        sync: false
-      - key: BACKUP_CHAT_ID
+        value: kelembingo-combined
+      - key: ADMIN_AUTH_SECRET
         sync: false
       - key: ADMIN_USERNAME
         sync: false
       - key: ADMIN_PASSWORD
         sync: false
-    autoDeploy: true
-
-  # ── Bots: one continuously running Telegram polling service ──
-  # Telegram long polling must have one owner. A cron definition can overlap
-  # or restart polling workers and duplicate conversation replies.
-  - type: web
-    name: kelembingo
-    runtime: docker
-    plan: free
-    dockerfilePath: ./Dockerfile.bot
-    dockerContext: .
-    healthCheckPath: /
-    envVars:
-      - key: PYTHONUNBUFFERED
-        value: "1"
-      - key: USE_GATEWAY
-        value: "true"
-      # Explicitly prevent this service from delegating to the gateway entrypoint.
-      - key: RENDER_API_ONLY
-        value: "false"
-      # Safety guard if this service ever imports the API module.
-      - key: GAME_ENGINE_ENABLED
-        value: "false"
-      - key: GATEWAY_URL
-        value: https://kelembingo-sqnv-y8ry.onrender.com
-      - key: WEBAPP_URL
-        value: https://kelembingo-frontend-i8yy-9m27.onrender.com/
-      # Set this secret in the bot service dashboard; it must exactly match
-      # the gateway service INTERNAL_API_KEY. Never commit a placeholder value.
-      - key: INTERNAL_API_KEY
-        sync: false
-      - key: BOT_SERVICE_ID
-        value: kelembingo-bot-prod
       - key: BOT_TOKEN
         sync: false
       - key: ADMIN_BOT_TOKEN
         sync: false
       - key: PAYMENT_BOT_TOKEN
         sync: false
-      - key: ADMIN_CHAT_ID
-        value: "8462274722"
-      - key: ADMIN_TALK_BOT_TOKEN
-        sync: false
       - key: SUPPORT_BOT_TOKEN
         sync: false
       - key: ADMIN_SUPPORT_BOT_TOKEN
+        sync: false
+      - key: ADMIN_TALK_BOT_TOKEN
+        sync: false
+      - key: BACKUP_BOT_TOKEN
+        sync: false
+      - key: ADMIN_CHAT_ID
+        sync: false
+      - key: BACKUP_CHAT_ID
         sync: false
     autoDeploy: true

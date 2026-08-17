@@ -73,11 +73,13 @@ site).
    (bots + Mini App)           (dashboard + game via Socket.IO)
 ```
 
-- **Backend** (Render, `RENDER_API_ONLY=true`): bots + API + game loop, no
-  static file serving (saves ~80 MB RAM on free plan).
-- **Frontend** (Render static service, `dashboard-react/` as root): Vite-built
-  React/Tailwind app using `VITE_GATEWAY_URL` or the browser origin.
-- All bots + API share **one database** via SQLAlchemy.
+- **Backend** (one Render Docker service): `run_all.py` starts the gateway,
+  Supabase/PostgreSQL-backed game engine, Socket.IO API, and configured Telegram
+  workers in one container. The gateway is the single database owner.
+- **Frontend** (separate Render static service, `dashboard-react/` as root):
+  Vite-built React/Tailwind app using `VITE_GATEWAY_URL` or the browser origin.
+- The gateway and bots share the same Supabase/PostgreSQL database through the
+  local gateway HTTP bridge; no second Render polling service is required.
 - The gateway never serves frontend files; it remains API + Socket.IO + game engine.
 
 ---
@@ -91,7 +93,7 @@ site).
 | Database   | SQLite (dev) / PostgreSQL (prod) via SQLAlchemy |
 | Telegram   | python-telegram-bot v21+ |
 | Frontend   | React 19 + TypeScript + TailwindCSS 4 + Socket.IO client |
-| Deployment | Docker on Render (gateway/bots) + Render static service (frontend) |
+| Deployment | One combined Docker service on Render + Render static service (frontend) |
 
 ---
 

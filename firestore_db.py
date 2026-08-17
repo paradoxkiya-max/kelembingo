@@ -17,14 +17,16 @@ logger = logging.getLogger(__name__)
 # missing or misconfigured. Local development/tests retain the SQLite default.
 _RAW_DATABASE_URL = os.getenv("DATABASE_URL")
 _IS_RENDER_GATEWAY = os.getenv("RENDER_API_ONLY", "").lower() == "true"
+_IS_COMBINED_SERVICE = os.getenv("COMBINED_SERVICE", "").lower() == "true"
+_REQUIRE_POSTGRES = _IS_RENDER_GATEWAY or _IS_COMBINED_SERVICE
 if not _RAW_DATABASE_URL:
-    if _IS_RENDER_GATEWAY:
-        raise RuntimeError("DATABASE_URL must be a PostgreSQL URL for the Render gateway")
+    if _REQUIRE_POSTGRES:
+        raise RuntimeError("DATABASE_URL must be a PostgreSQL/Supabase URL for this service")
     DATABASE_URL = "sqlite:///kelembingo.db"
 else:
     DATABASE_URL = _RAW_DATABASE_URL
-    if _IS_RENDER_GATEWAY and not DATABASE_URL.startswith(("postgresql://", "postgres://")):
-        raise RuntimeError("Render gateway DATABASE_URL must use PostgreSQL")
+    if _REQUIRE_POSTGRES and not DATABASE_URL.startswith(("postgresql://", "postgres://")):
+        raise RuntimeError("DATABASE_URL must use PostgreSQL/Supabase for this service")
 
 if DATABASE_URL.startswith("postgres://"):
     # SQLAlchemy 1.4+ requires postgresql:// instead of postgres://

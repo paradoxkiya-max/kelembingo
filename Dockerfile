@@ -14,5 +14,5 @@ COPY . .
 
 EXPOSE 8000
 
-# The default image is gateway-only. Telegram polling is opt-in via Dockerfile.bot.
-CMD ["python", "run_gateway.py"]
+# One Render service owns the gateway and configured Telegram workers.
+CMD ["python", "run_all.py"]
