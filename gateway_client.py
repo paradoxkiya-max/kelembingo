@@ -472,7 +472,9 @@ class GatewayClient:
     # Can be overridden per collection via env vars, e.g. CACHE_TTL_USERS=5.
     DEFAULT_COLLECTION_TTL = {
         'users': 10,
-        'bot_content': 60,
+        # Bot Content is edited by admins and read by separate bot workers;
+        # never serve a stale CMS document across processes.
+        'bot_content': 0,
         'system': 20,
         'support_users': 10,
         'support_tickets': 5,

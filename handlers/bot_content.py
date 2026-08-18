@@ -6,6 +6,7 @@ Falls back to hardcoded defaults if Firestore is empty.
 
 import time
 import logging
+import os
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -151,13 +152,17 @@ def preload_bot_content(db=None) -> int:
 
 def get_bot_text(key: str, db=None, **kwargs) -> str:
     """
-    Get a bot message by key. Uses Firestore cache with TTL.
+    Get a bot message by key. GatewayClient workers read Bot Content live so
+    admin edits propagate across processes immediately; local gateway reads
+    retain the short in-process cache for ordinary API work.
     Falls back to hardcoded defaults. Supports {variable} interpolation.
     """
     global _cache
+    gateway_worker = bool(getattr(db, "gateway_url", None))
+    cache_ttl = 0 if gateway_worker else _cache_ttl
 
-    # Check cache
-    if key in _cache:
+    # Never serve stale CMS text from a separate GatewayClient worker.
+    if cache_ttl > 0 and key in _cache:
         text, expiry = _cache[key]
         if time.time() < expiry:
             return _format(text, **kwargs)
@@ -170,14 +175,16 @@ def get_bot_text(key: str, db=None, **kwargs) -> str:
                 data = doc.to_dict()
                 text = data.get('content', '')
                 if text:
-                    _cache[key] = (text, time.time() + _cache_ttl)
+                    if cache_ttl > 0:
+                        _cache[key] = (text, time.time() + cache_ttl)
                     return _format(text, **kwargs)
         except Exception as e:
             logger.warning(f"Failed to fetch bot_content/{key}: {e}")
 
     # Fall back to default
     text = DEFAULTS.get(key, f"[Missing: {key}]")
-    _cache[key] = (text, time.time() + _cache_ttl)
+    if cache_ttl > 0:
+        _cache[key] = (text, time.time() + cache_ttl)
     return _format(text, **kwargs)
 
 
