@@ -104,7 +104,7 @@ export default function CartelaSelect() {
   const [cards, setCards] = useState<Cartela[]>([]);
   const [seconds, setSeconds] = useState(SELECTION_DURATION);
   const [wallet, setWallet] = useState(0);
-  const [derashPool, setDerashPool] = useState(0);
+  const [derashPool, setDerashPool] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [transitioning, setTransitioning] = useState(false);
   const [error, setError] = useState("");
@@ -274,7 +274,8 @@ export default function CartelaSelect() {
     publishSelected([]);
     if (walletInitializedRef.current) setWallet(walletRef.current);
     else publishWallet(walletValue(player?.play_wallet) || 0);
-    setDerashPool(Number(next.derash) || calcDerash(Number(next.player_count || 0), pendingRef.current, stake));
+    const initialDerash = Number(next.derash);
+    setDerashPool(Number.isFinite(initialDerash) ? initialDerash : calcDerash(Number(next.player_count || 0), pendingRef.current, stake));
     setSeconds(secondsLeft(next, serverOffsetRef.current));
     setLoading(false);
     setTransitioning(false);
@@ -448,7 +449,7 @@ export default function CartelaSelect() {
     return Math.max(Number(round?.player_count || 0), total.size);
   }, [pending, round?.player_count, taken]);
   const displayWallet = wallet;
-  const displayDerash = derashPool || calcDerash(playerCount, pending, stake);
+  const displayDerash = derashPool ?? calcDerash(playerCount, pending, stake);
   const closed = Boolean(round && (round.status !== "selecting" || seconds <= 0));
 
   return <div className="relative flex h-[calc(100vh-56px)] max-h-[calc(100vh-56px)] flex-col overflow-hidden bg-[linear-gradient(180deg,#0d0f22_0%,#151833_40%,#0d0f22_100%)]">
