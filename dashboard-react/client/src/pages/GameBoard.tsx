@@ -4,7 +4,7 @@ import { Check, Eye, Loader2, Music, Volume2, VolumeX, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useSearch } from "wouter";
 import { usePlayer } from "@/contexts/PlayerContext";
-import { playerApi, type Cartela, type Round } from "@/lib/gateway";
+import { playerApi, prewarmSelectionRound, type Cartela, type Round } from "@/lib/gateway";
 import { observeRealtimeConnection, observeRound } from "@/lib/realtime";
 import { etb } from "@/lib/format";
 import { cardValues, fallbackCartela, isValidCartela } from "@/lib/cartelaFallback";
@@ -246,6 +246,7 @@ export default function GameBoard() {
 
   useEffect(() => {
     if (!winnerAnnouncement) return;
+    void prewarmSelectionRound(Math.max(10, Number(round?.stake) || 10)).catch(() => undefined);
     setReturnCountdown(10);
     const timerId = window.setInterval(() => setReturnCountdown((seconds) => seconds > 0 ? seconds - 1 : 0), 1000);
     return () => window.clearInterval(timerId);

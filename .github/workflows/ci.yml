@@ -40,6 +40,7 @@ jobs:
           python tools/test_selection_wallet_reservation.py
           python tools/test_selection_join_contract.py
           python tools/test_cartela_fallback_contract.py
+          python tools/test_realtime_selection_stability_contract.py
           python tools/test_selection_deadline_guard.py
           python tools/test_late_two_cartela_selection.py
           python tools/test_cross_player_cartela_realtime.py

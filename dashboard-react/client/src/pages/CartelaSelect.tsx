@@ -196,6 +196,7 @@ export default function CartelaSelect() {
         return;
       }
       setCartelas([]);
+      setSeconds(SELECTION_SECONDS);
       previewFetches.current.clear();
       confirmStarted.current = false;
       deadlineHandoff.current = false;

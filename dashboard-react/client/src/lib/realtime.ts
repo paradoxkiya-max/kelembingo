@@ -9,7 +9,36 @@ export type RoomAck = SnapshotMessage & { ok: boolean; action?: "select" | "unse
 type Listener = (value: Round | null) => void;
 type Subscription = { collection: string; doc_id?: string; user_id?: string; player_token?: string; admin_token?: string };
 const roundSnapshotCache = new Map<string, Round>();
+const roundEventRevisionWatermarks = new Map<string, number>();
 const ROUND_SNAPSHOT_CACHE_LIMIT = 32;
+const ROUND_EVENT_WATERMARK_LIMIT = 64;
+
+function roundMessageRevision(message: SnapshotMessage) {
+  const nestedRound = message.round && typeof message.round === "object" ? message.round : null;
+  const nestedData = message.data && typeof message.data === "object" ? message.data as { pending_revision?: unknown } : null;
+  const value = message.pending_revision ?? nestedRound?.pending_revision ?? nestedData?.pending_revision;
+  const revision = Number(value);
+  return Number.isFinite(revision) && revision >= 0 ? revision : null;
+}
+
+function isStaleRoundMessage(event: string, message: SnapshotMessage) {
+  if (event !== "cartela_pool" && event !== "room_state" && event !== "snapshot" && event !== "query_snapshot") return false;
+  const roundId = String(message.round_id || message.id || (message.data as { id?: unknown } | undefined)?.id || "");
+  if (!roundId) return false;
+  const revision = roundMessageRevision(message);
+  if (revision === null) return false;
+  const previous = roundEventRevisionWatermarks.get(roundId);
+  if (previous !== undefined && revision < previous) return true;
+  if (previous === undefined || revision > previous) {
+    roundEventRevisionWatermarks.set(roundId, revision);
+    while (roundEventRevisionWatermarks.size > ROUND_EVENT_WATERMARK_LIMIT) {
+      const oldest = roundEventRevisionWatermarks.keys().next().value;
+      if (oldest === undefined) break;
+      roundEventRevisionWatermarks.delete(oldest);
+    }
+  }
+  return false;
+}
 
 function cacheRoundSnapshot(roundId: string, round: Round) {
   roundSnapshotCache.delete(roundId);
@@ -56,6 +85,7 @@ class RoomManager {
   }
 
   private dispatch(event: string, message: SnapshotMessage) {
+    if (isStaleRoundMessage(event, message)) return;
     if (event === "snapshot" && !message.collection) return;
     if (event === "query_snapshot" && !message.collection) return;
     if (event === "cartela_pool" && message.collection && message.collection !== "rounds") return;

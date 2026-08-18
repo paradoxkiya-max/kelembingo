@@ -82,6 +82,20 @@ export function formatWithdrawalValidation(value: WithdrawalValidation): string 
 export type Transaction = { id?: string; type?: string; amount?: number; status?: string; created_at?: string | number; description?: string; reference?: string; telebirr_name?: string; phone?: string };
 type TransactionDocument = { id?: string; data?: Record<string, unknown>; amount?: unknown; status?: unknown; createdAt?: unknown; created_at?: unknown; transactionId?: unknown; transaction_id?: unknown; telebirrName?: unknown; telebirr_name?: unknown; phone?: unknown };
 const cartelaCache = new Map<number, Cartela>();
+const warmedRoundCache = new Map<number, { round: Round; expiresAt: number }>();
+
+async function createOrReuseRound(stake: number) {
+  const cached = warmedRoundCache.get(stake);
+  if (cached && cached.expiresAt > Date.now()) return { round: cached.round };
+  warmedRoundCache.delete(stake);
+  const response = await gatewayFetch<{ round: Round }>(`/api/rounds/create?stake=${stake}`, { method: "POST" });
+  if (response.round?.id) warmedRoundCache.set(stake, { round: response.round, expiresAt: Date.now() + 15000 });
+  return response;
+}
+
+export async function prewarmSelectionRound(stake: number) {
+  return createOrReuseRound(stake);
+}
 
 function normalizeTransaction(document: TransactionDocument): Transaction {
   const data: Record<string, unknown> = document.data && typeof document.data === "object" ? document.data : document as Record<string, unknown>;
@@ -115,7 +129,7 @@ export const playerApi = {
     return response;
   },
   cartelas: () => gatewayFetch<{ cartelas: Cartela[]; count: number }>("/api/cartelas"),
-  createRound: (stake: number) => gatewayFetch<{ round: Round }>(`/api/rounds/create?stake=${stake}`, { method: "POST" }),
+  createRound: (stake: number) => createOrReuseRound(stake),
   joinRound: (roundId: string, userId: string | number, cartelaNumbers: number[], userName?: string, options?: { requirePending?: boolean; pendingRevision?: number }) => gatewayFetch<{ round?: Round; ok?: boolean }>(`/api/rounds/${encodeURIComponent(roundId)}/join`, { method: "POST", body: JSON.stringify({ user_id: Number(userId), cartela_numbers: cartelaNumbers, user_name: userName || "Player", require_pending: Boolean(options?.requirePending), pending_revision: Number(options?.pendingRevision || 0) }) }),
   selectCartela: (roundId: string, userId: string | number, cartelaNumber: number, requestId?: string) => gatewayFetch<CartelaSelection>(`/api/rounds/${encodeURIComponent(roundId)}/select`, { method: "POST", body: JSON.stringify({ user_id: Number(userId), cartela_number: cartelaNumber, request_id: requestId }) }),
   unselectCartela: (roundId: string, userId: string | number, cartelaNumber: number, requestId?: string) => gatewayFetch<CartelaSelection>(`/api/rounds/${encodeURIComponent(roundId)}/unselect`, { method: "POST", body: JSON.stringify({ user_id: Number(userId), cartela_number: cartelaNumber, request_id: requestId }) }),
