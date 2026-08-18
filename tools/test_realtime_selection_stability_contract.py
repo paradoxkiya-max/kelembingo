@@ -15,6 +15,7 @@ assert "export async function prewarmSelectionRound" in gateway
 assert "prewarmSelectionRound" in game
 assert "setSeconds(SELECTION_SECONDS)" in select
 assert "refreshHandoff" not in select
-assert "if (joinedCartelas.length > 0 || (latest.status === \"playing\" && !confirmStarted.current))" in select
+assert "if (joinedCartelas.length > 0)" in select
+assert "latest.status === \"playing\"" in select and "void confirmSelection()" in select
 
 print("realtime selection stability contract check: PASS")

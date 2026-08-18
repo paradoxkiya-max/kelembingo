@@ -73,12 +73,12 @@ export default function CartelaSelect() {
   const lastPoolSnapshotFingerprint = useRef("");
   const selectedRef = useRef<number[]>([]);
   const authoritativeSelectedRef = useRef<number[]>([]);
-  const mutationNumbers = useRef(new Set<number>());
+  const mutationCounts = useRef(new Map<number, number>());
   const pendingVisual = useRef(new Map<number, boolean>());
   const deadlineRetryTimer = useRef<number | null>(null);
   const previewSlotByCartela = useRef(new Map<number, number>());
   const selectionRequests = useRef(new Set<Promise<void>>());
-  const selectionTail = useRef<Promise<void>>(Promise.resolve());
+  const selectionTails = useRef(new Map<number, Promise<void>>());
   const selectionEpoch = useRef(0);
   const currentRoundId = useRef("");
   const deadlineHandoff = useRef(false);
@@ -87,11 +87,11 @@ export default function CartelaSelect() {
     if (deadlineRetryTimer.current !== null) { window.clearTimeout(deadlineRetryTimer.current); deadlineRetryTimer.current = null; }
     selectionEpoch.current += 1;
     currentRoundId.current = "";
-    mutationNumbers.current.clear();
+    mutationCounts.current.clear();
     pendingVisual.current.clear();
     setMutatingCards(new Set());
     selectionRequests.current.clear();
-    selectionTail.current = Promise.resolve();
+    selectionTails.current.clear();
   }, []);
 
   const wallet = walletValue(player?.play_wallet);
@@ -180,7 +180,7 @@ export default function CartelaSelect() {
     setLoadError("");
     setError("");
     selectionRequests.current.clear();
-    selectionTail.current = Promise.resolve();
+    selectionTails.current.clear();
     currentRoundId.current = "";
     // createRound is atomic: it returns the existing active round or creates
     // the next one. One request removes the post-round monitor gap and makes
@@ -285,7 +285,7 @@ export default function CartelaSelect() {
         else if (nextRound.status === "completed") restartSelection();
       }
     }).catch((e) => active && selectionEpoch.current === epoch && setLoadError(e instanceof Error ? e.message : "Unable to load this round")).finally(() => active && selectionEpoch.current === epoch && setLoading(false));
-    return () => { active = false; if (deadlineRetryTimer.current !== null) { window.clearTimeout(deadlineRetryTimer.current); deadlineRetryTimer.current = null; } selectionEpoch.current += 1; currentRoundId.current = ""; selectionRequests.current.clear(); selectionTail.current = Promise.resolve(); unsubscribePool?.(); unsubscribeRound?.(); unsubscribeReconnect?.(); };
+    return () => { active = false; if (deadlineRetryTimer.current !== null) { window.clearTimeout(deadlineRetryTimer.current); deadlineRetryTimer.current = null; } selectionEpoch.current += 1; currentRoundId.current = ""; selectionRequests.current.clear(); selectionTails.current.clear(); unsubscribePool?.(); unsubscribeRound?.(); unsubscribeReconnect?.(); };
   }, [abortSelectionQueue, applyPoolSnapshot, loadAttempt, navigate, publishSelected, restartSelection, stake, player?.user_id]);
 
   useEffect(() => {
@@ -349,11 +349,11 @@ export default function CartelaSelect() {
     const userId = String(player?.user_id || "");
     const selecting = !current.includes(number);
     const roundId = String(round?.id || "");
-    if (busy || mutationNumbers.current.has(number) || (!selecting && !current.includes(number)) || (selecting && taken.has(number)) || !userId || selectionClosed || !roundId) return;
+    if (busy || (!selecting && !current.includes(number)) || (selecting && taken.has(number)) || !userId || selectionClosed || !roundId) return;
     if (selecting && current.length >= MAX_SELECTIONS) return;
     const requestId = selectionRequestId();
     const epoch = selectionEpoch.current;
-    mutationNumbers.current.add(number);
+    mutationCounts.current.set(number, (mutationCounts.current.get(number) || 0) + 1);
     pendingVisual.current.set(number, selecting);
     setMutatingCards((previous) => new Set(previous).add(number));
     publishSelected(selecting ? [...current, number] : current.filter((item) => item !== number));
@@ -373,7 +373,7 @@ export default function CartelaSelect() {
             : playerApi.unselectCartela(roundId, userId, number, requestId));
         }
         if (selectionEpoch.current !== epoch || currentRoundId.current !== roundId) return;
-        pendingVisual.current.delete(number);
+        if (pendingVisual.current.get(number) === selecting) pendingVisual.current.delete(number);
         applyPoolSnapshot(result);
         if (Number.isFinite(Number(result.play_wallet))) {
           const balance = Number(result.play_wallet);
@@ -399,20 +399,31 @@ export default function CartelaSelect() {
           restartSelection();
           return;
         }
-        pendingVisual.current.delete(number);
-        publishSelected(authoritativeSelectedRef.current);
+        if (pendingVisual.current.get(number) === selecting) {
+          pendingVisual.current.delete(number);
+          publishSelected(authoritativeSelectedRef.current);
+        }
         setError(message);
       } finally {
         if (selectionEpoch.current === epoch && currentRoundId.current === roundId) {
-          mutationNumbers.current.delete(number);
-          setMutatingCards((previous) => { const next = new Set(previous); next.delete(number); return next; });
+          const remaining = Math.max(0, (mutationCounts.current.get(number) || 1) - 1);
+          if (remaining) mutationCounts.current.set(number, remaining);
+          else {
+            mutationCounts.current.delete(number);
+            setMutatingCards((previous) => { const next = new Set(previous); next.delete(number); return next; });
+          }
         }
       }
     };
-    const operation = selectionTail.current.then(execute);
-    selectionTail.current = operation.catch(() => undefined);
+    const previous = selectionTails.current.get(number) || Promise.resolve();
+    const operation = previous.then(execute);
+    const tail = operation.catch(() => undefined);
+    selectionTails.current.set(number, tail);
     selectionRequests.current.add(operation);
-    void operation.finally(() => selectionRequests.current.delete(operation)).catch(() => undefined);
+    void operation.finally(() => {
+      selectionRequests.current.delete(operation);
+      if (selectionTails.current.get(number) === tail) selectionTails.current.delete(number);
+    }).catch(() => undefined);
   }, [abortSelectionQueue, applyPlayWallet, applyPoolSnapshot, busy, navigate, player?.user_id, restartSelection, round?.id, selectionClosed, taken]);
 
   async function confirmSelection() {

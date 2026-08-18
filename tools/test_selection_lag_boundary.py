@@ -7,16 +7,16 @@ source = (ROOT / "dashboard-react/client/src/pages/CartelaSelect.tsx").read_text
 
 # Contract checks tie the simulation to the real implementation rather than
 # testing an unrelated queue abstraction.
-assert "const operation = selectionTail.current.then(execute)" in source and "selectionRequests.current.add(operation)" in source
-assert "selectionTail.current = operation.catch(() => undefined)" in source
-assert "The server finalizer owns the deadline handoff" in source
-assert "shares the durable round/user lock" in source
+assert "const previous = selectionTails.current.get(number) || Promise.resolve()" in source and "selectionRequests.current.add(operation)" in source
+assert "const tail = operation.catch(() => undefined)" in source and "selectionTails.current.set(number, tail)" in source
+assert "const selectionClosed = expired || round?.status !== \"selecting\" || seconds <= 0;" in source
+assert "await Promise.allSettled(queuedOperations)" in source
 assert "for (;;)" not in source
-assert "const committedSelection = normalizeCartelas(selectedRef.current)" in source
+assert "const committedSelection = normalizeCartelas(latest.pending_selections?.[userId] || [])" in source
 assert "const SELECTION_SECONDS = 45;" in source
 assert "window.setInterval(sync, 250)" in source
 assert "(Date.now() + serverClockOffset)" in source
-assert "selectionIntents.current" in source
+assert "const mutationCounts = useRef(new Map<number, number>())" in source
 assert "pending_revision" in source
 
 @dataclass(frozen=True)
@@ -37,8 +37,8 @@ def apply_intents(authoritative: list[int], intents: list[Intent]) -> list[int]:
     return state[:2]
 
 
-# Three rapid taps occur immediately before expiry. Network responses arrive
-# out of order, but the client queue serializes execution in tap order.
+# Three rapid taps occur immediately before expiry. Responses may complete
+# out of order across cards, but each card remains ordered independently.
 intents = [
     Intent(44_100, 12, True, 900),
     Intent(44_200, 13, True, 100),
@@ -47,12 +47,10 @@ intents = [
 assert sorted(intents, key=lambda item: item.response_delay_ms) != intents
 assert apply_intents([], intents) == [13]
 
-# The automatic handoff at 45s must wait for the serialized queue's last
-# response at 45.15s, then join only the remaining card.
-queue_drains_at = 0
-for item in intents:
-    queue_drains_at = max(queue_drains_at, item.at_ms) + item.response_delay_ms
-assert queue_drains_at == 45_150
+# The automatic handoff at 45s must wait for the per-card queues' last
+# response at 45.05s, then join only the remaining card.
+queue_drains_at = max(44_200 + 100, 44_100 + 900 + 50)
+assert queue_drains_at == 45_050
 assert queue_drains_at > 45_000
 assert apply_intents([], intents) == [13]
 

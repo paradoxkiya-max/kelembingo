@@ -161,7 +161,7 @@ assert 'pool_snapshot = {' in gateway
 assert '"pending_selections": result.get(\'_pending\', {})' in gateway
 assert '"selected_cartelas": result.get("selected_cartelas", [])' in gateway
 assert 'setMutatingCards' in selection
-assert 'mutationNumbers' in selection
+assert 'mutationCounts' in selection
 assert 'mergePendingVisual' in selection
 assert 'const selectionClosed = expired || round?.status !== "selecting" || seconds <= 0;' in selection
 assert 'setLiveDerashPool((previous) =>' not in selection
@@ -169,7 +169,7 @@ assert "applyPlayWallet" in context
 assert "walletPreview" in selection and "setLiveDerashPool(Math.round" in selection
 assert "liveDerashPool" in selection
 assert "pendingRevision" in selection and "applyPoolSnapshot(result)" in selection
-assert "selectionRequests" in selection and "mutationNumbers" in selection and "roomManager.roomIntent" in selection
+assert "selectionRequests" in selection and "mutationCounts" in selection and "roomManager.roomIntent" in selection
 assert "queuedCardDelta" not in selection and "displayedPool" not in selection
 assert "applyPoolSnapshot" in selection and "selectionEpoch" in selection
 assert "const CartelaGrid = memo" in selection and "pendingTaken" in selection
