@@ -31,6 +31,7 @@ jobs:
           python tools/test_admin_realtime_contract.py
           python tools/test_bot_performance_contract.py
           python tools/test_processing_message_contract.py
+          python tools/test_wallet_flow_contract.py
           python tools/test_security_and_worker_contract.py
           python tools/test_database_config_guard.py
           python tools/test_startup_readiness.py

@@ -2540,9 +2540,12 @@ async def subscribe(sid, data):
         if not identity:
             return {"ok": False, "error": "Unauthorized"}
         if identity.get("kind") == "player":
-            if collection != "users" or str(doc_id) != str(identity.get("user_id")):
+            if collection == "player_payments":
+                if str(data.get("user_id") or "") != str(identity.get("user_id") or ""):
+                    return {"ok": False, "error": "Forbidden"}
+            elif collection != "users" or str(doc_id) != str(identity.get("user_id")):
                 return {"ok": False, "error": "Forbidden"}
-    room = f"{collection}:{doc_id}" if doc_id else collection
+    room = (f"player_payments:{data.get('user_id')}" if collection == "player_payments" else (f"{collection}:{doc_id}" if doc_id else collection))
     await sio.enter_room(sid, room)
     return {"ok": True}
 
@@ -2551,7 +2554,7 @@ async def unsubscribe(sid, data):
     """Client unsubscribes from a collection/doc."""
     collection = data.get('collection')
     doc_id = data.get('doc_id')
-    room = f"{collection}:{doc_id}" if doc_id else collection
+    room = (f"player_payments:{data.get('user_id')}" if collection == "player_payments" else (f"{collection}:{doc_id}" if doc_id else collection))
     await sio.leave_room(sid, room)
 
 def _snapshot_fingerprint(collection: str, doc_id: str, exists: bool, data):
@@ -2609,6 +2612,18 @@ async def broadcast_event(collection: str, doc_id: str):
             "docs": [{"id": doc_id, "data": snapshot_data}],
         }
         await sio.emit('query_snapshot', query_payload, room=room_collection)
+
+        # Player wallet screens subscribe to a private aggregate room instead of
+        # exposing deposit/withdrawal collections to a player token.
+        if collection in {"deposits", "withdrawals"} and isinstance(snapshot_data, dict):
+            payment_user_id = snapshot_data.get("userId") or snapshot_data.get("user_id")
+            if payment_user_id:
+                await sio.emit("query_snapshot", {
+                    "type": "query_snapshot",
+                    "collection": "player_payments",
+                    "id": doc_id,
+                    "docs": [{"id": doc_id, "data": snapshot_data}],
+                }, room=f"player_payments:{payment_user_id}")
     return True
 
 async def broadcast_cartelas_update():

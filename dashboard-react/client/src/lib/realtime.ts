@@ -7,7 +7,7 @@ type SnapshotMessage = { collection?: string; id?: string; user_id?: string; rou
 export type RoomIntent = { round_id: string; user_id: string; intent_id: string; action: "select" | "unselect"; cartela_number: number };
 export type RoomAck = SnapshotMessage & { ok: boolean; action?: "select" | "unselect"; cartela_number?: number; play_wallet?: number; reserved_cartelas?: number[] };
 type Listener = (value: Round | null) => void;
-type Subscription = { collection: string; doc_id?: string; player_token?: string; admin_token?: string };
+type Subscription = { collection: string; doc_id?: string; user_id?: string; player_token?: string; admin_token?: string };
 const roundSnapshotCache = new Map<string, Round>();
 const ROUND_SNAPSHOT_CACHE_LIMIT = 32;
 
@@ -141,8 +141,8 @@ class RoomManager {
     return () => this.connectionListeners.delete(listener);
   }
 
-  subscribeCollection(collection: string, listener: (message: SnapshotMessage) => void) {
-    const data: Subscription = { collection };
+  subscribeCollection(collection: string, listener: (message: SnapshotMessage) => void, extra: Partial<Pick<Subscription, "user_id">> = {}) {
+    const data: Subscription = { collection, ...extra };
     const adminToken = window.localStorage.getItem("kelembingo.adminToken"); if (adminToken) data.admin_token = adminToken;
     const key = JSON.stringify(data); const existing = this.rooms.get(key);
     if (existing) { existing.refs += 1; existing.listeners.add(listener); } else { this.rooms.set(key, { data, refs: 1, listeners: new Set([listener]) }); this.connect()?.emit("subscribe", data); }
@@ -202,7 +202,7 @@ export function observePlayer(userId: string, listener: (player: Player | null) 
 }
 
 export function observePlayerPayments(userId: string, listener: () => void) {
-  return roomManager.subscribeDocument("payments", userId, () => listener());
+  return roomManager.subscribeCollection("player_payments", () => listener(), { user_id: String(userId) });
 }
 
 export function observeAdminCollections(collections: string[], listener: (message: SnapshotMessage) => void) {
