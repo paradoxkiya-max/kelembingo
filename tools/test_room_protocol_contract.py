@@ -25,8 +25,8 @@ assert 'roomLeave(roundId: string)' in realtime
 assert 'roomManager.roomJoin' in select
 assert 'roomManager.roomIntent' in select
 assert 'ROUND_SNAPSHOT_CACHE_LIMIT = 32' in realtime and 'if (cached) deliver(cached)' in realtime
-assert 'playerApi.selectCartela(roundId, userId, number, intent.id)' in select
-assert 'playerApi.unselectCartela(roundId, userId, number, intent.id)' in select
+assert 'playerApi.selectCartela(roundId, userId, number, requestId)' in select
+assert 'playerApi.unselectCartela(roundId, userId, number, requestId)' in select
 assert 'selectionQueue' not in select
 assert 'selectionRequests' in select
 

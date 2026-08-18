@@ -14,9 +14,7 @@ const MAX_SELECTIONS = 2;
 const SELECTION_SECONDS = 45;
 const CARTELA_POOL: Cartela[] = Array.from({ length: 500 }, (_, index) => ({ number: index + 1 }));
 
-type PoolSnapshot = { taken_cartelas?: number[]; player_count?: number; derash_pool?: number; pending_revision?: number; pending_selections?: Record<string, number[]> };
-type SelectionIntent = { id: string; cartelaNumber: number; selecting: boolean };
-
+type PoolSnapshot = { taken_cartelas?: number[]; player_count?: number; derash_pool?: number; pending_revision?: number; pending_selections?: Record<string, number[]>; selected_cartelas?: number[] };
 type PoolStateLike = Pick<PoolSnapshot, "taken_cartelas" | "pending_revision" | "pending_selections">;
 
 function poolStateFingerprint(snapshot: PoolStateLike, revision = Math.max(0, Number(snapshot.pending_revision) || 0)) {
@@ -30,15 +28,14 @@ function poolStateFingerprint(snapshot: PoolStateLike, revision = Math.max(0, Nu
   });
 }
 
-function replayIntents(authoritative: number[], intents: SelectionIntent[]) {
-  const next = new Set(normalizeCartelas(authoritative));
-  for (const intent of intents) intent.selecting ? next.add(intent.cartelaNumber) : next.delete(intent.cartelaNumber);
-  return normalizeCartelas(Array.from(next));
-}
-
 function selectionRequestId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
   return `selection-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function roundDeadlinePassed(round?: Pick<Round, "selection_deadline"> | null) {
+  const deadline = round?.selection_deadline ? new Date(round.selection_deadline).getTime() : 0;
+  return Boolean(deadline && Number.isFinite(deadline) && deadline <= Date.now());
 }
 
 export default function CartelaSelect() {
@@ -55,6 +52,7 @@ export default function CartelaSelect() {
   const [seconds, setSeconds] = useState(SELECTION_SECONDS);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [mutatingCards, setMutatingCards] = useState<Set<number>>(new Set());
   const [error, setError] = useState("");
   const [loadError, setLoadError] = useState("");
   const [loadAttempt, setLoadAttempt] = useState(0);
@@ -69,7 +67,7 @@ export default function CartelaSelect() {
   const lastPoolSnapshotFingerprint = useRef("");
   const selectedRef = useRef<number[]>([]);
   const authoritativeSelectedRef = useRef<number[]>([]);
-  const selectionIntents = useRef<SelectionIntent[]>([]);
+  const mutationNumbers = useRef(new Set<number>());
   const previewSlotByCartela = useRef(new Map<number, number>());
   const selectionRequests = useRef(new Set<Promise<void>>());
   const selectionTail = useRef<Promise<void>>(Promise.resolve());
@@ -80,7 +78,8 @@ export default function CartelaSelect() {
   const abortSelectionQueue = useCallback(() => {
     selectionEpoch.current += 1;
     currentRoundId.current = "";
-    selectionIntents.current = [];
+    mutationNumbers.current.clear();
+    setMutatingCards(new Set());
     selectionRequests.current.clear();
     selectionTail.current = Promise.resolve();
   }, []);
@@ -142,22 +141,16 @@ export default function CartelaSelect() {
     if (revision === pendingRevision.current && lastPoolSnapshotFingerprint.current && fingerprint !== lastPoolSnapshotFingerprint.current) return null;
     if (revision) pendingRevision.current = revision;
     lastPoolSnapshotFingerprint.current = fingerprint;
-    const authoritative = normalizeCartelas(nextPending[String(player?.user_id || "")] || []);
+    const authoritative = snapshot.pending_selections !== undefined
+      ? normalizeCartelas(nextPending[String(player?.user_id || "")] || [])
+      : normalizeCartelas(snapshot.selected_cartelas || []);
     authoritativeSelectedRef.current = authoritative;
     setTaken(new Set((snapshot.taken_cartelas || []).map(Number)));
-    setPending(nextPending);
-    const visible = publishSelected(replayIntents(authoritative, selectionIntents.current));
-    if (Number.isFinite(Number(snapshot.derash_pool))) {
-      // A response for the first queued selection legitimately contains one
-      // card's Derash. Reapply only the still-pending local overlay so that a
-      // two-card selection remains visually at two cards until the second
-      // authoritative response arrives.
-      const queuedCardDelta = visible.length - authoritative.length;
-      const displayedPool = Number(snapshot.derash_pool) + queuedCardDelta * stake * 0.80;
-      setLiveDerashPool(Math.round(Math.max(0, displayedPool) * 100) / 100);
-    }
+    if (snapshot.pending_selections !== undefined) setPending(nextPending);
+    const visible = publishSelected(authoritative);
+    if (Number.isFinite(Number(snapshot.derash_pool))) setLiveDerashPool(Math.round(Math.max(0, Number(snapshot.derash_pool)) * 100) / 100);
     return { authoritative, visible };
-  }, [player?.user_id, publishSelected, stake]);
+  }, [player?.user_id, publishSelected]);
 
   useEffect(() => {
     if (committedWallet !== null && wallet === committedWallet) setCommittedWallet(null);
@@ -176,7 +169,6 @@ export default function CartelaSelect() {
     setLoadError("");
     setError("");
     selectionRequests.current.clear();
-    selectionIntents.current = [];
     selectionTail.current = Promise.resolve();
     currentRoundId.current = "";
     // createRound is atomic: it returns the existing active round or creates
@@ -243,7 +235,7 @@ export default function CartelaSelect() {
             authoritativeSelectedRef.current = authoritative;
             setTaken(new Set((latest.taken_cartelas || []).map(Number)));
             setPending(latest.pending_selections || {});
-            publishSelected(replayIntents(authoritative, selectionIntents.current));
+            publishSelected(authoritative);
           }
           // A joined player must never remain on the selection grid. The
           // players snapshot can arrive just before the status=playing snapshot,
@@ -302,23 +294,15 @@ export default function CartelaSelect() {
   }, [round?.selection_deadline, round?.status, serverClockOffset]);
 
   useEffect(() => {
-    if (seconds > 0 || !round?.id) return;
+    if (seconds > 0 || !round?.id || confirmStarted.current) return;
     setExpired(true);
-    const pendingSelection = selectedRef.current;
-    if (pendingSelection.length && !confirmStarted.current) {
-      // selectedRef is updated synchronously by publishSelected, while the
-      // React selected state may still contain the previous render. Using the
-      // state here could incorrectly send a player back home at the deadline.
-      confirmStarted.current = true;
-      setError("");
-      void confirmSelection();
-    } else if (!pendingSelection.length) {
-      // The legacy flow immediately found the next round here. Navigating home
-      // leaves this expired round mounted in the browser history and causes the
-      // observed Go/CLOSED/back/re-enter loop.
-      restartSelection();
-    }
-  }, [restartSelection, round?.id, seconds, selected.length]);
+    // A tap can still be waiting on Socket.IO/REST when the clock reaches zero.
+    // Join confirmation owns the queue drain; never restart the round before
+    // the last select/deselect result has been applied.
+    confirmStarted.current = true;
+    setError("");
+    void confirmSelection();
+  }, [round?.id, seconds, selected.length]);
 
   useEffect(() => {
     const missing = selected.filter((number) => !cartelas.some((card) => card.number === number) && !previewFetches.current.has(number));
@@ -344,83 +328,71 @@ export default function CartelaSelect() {
   const toggleCard = useCallback((number: number) => {
     const current = selectedRef.current;
     const userId = String(player?.user_id || "");
-    const isSelected = current.includes(number);
-    // Automatic confirmation may be in progress, but a selected card must
-    // remain removable until the queue is durably drained. New selections are
-    // blocked during confirmation so the join cannot grow unexpectedly.
-    if (busy || (!isSelected && taken.has(number)) || !userId || expired || !round?.id) return;
-    if (!isSelected && current.length >= MAX_SELECTIONS) return;
-    const intent: SelectionIntent = { id: selectionRequestId(), cartelaNumber: number, selecting: !isSelected };
-    const roundId = String(round.id);
+    const selecting = !current.includes(number);
+    const roundId = String(round?.id || "");
+    if (busy || mutationNumbers.current.has(number) || (!selecting && !current.includes(number)) || (selecting && taken.has(number)) || !userId || expired || !roundId) return;
+    if (selecting && current.length >= MAX_SELECTIONS) return;
+    const requestId = selectionRequestId();
     const epoch = selectionEpoch.current;
-    selectionIntents.current.push(intent);
-    publishSelected(isSelected ? current.filter((item) => item !== number) : [...current, number]);
+    mutationNumbers.current.add(number);
+    setMutatingCards((previous) => new Set(previous).add(number));
     setError("");
-    setLiveDerashPool((previous) => Math.round(Math.max(0, (previous ?? sharedDerashPool) + (isSelected ? -stake * 0.80 : stake * 0.80)) * 100) / 100);
-    setWalletPreview((preview) => Math.max(0, (preview ?? committedWallet ?? wallet) + (isSelected ? stake : -stake)));
     const execute = async () => {
       if (selectionEpoch.current !== epoch || currentRoundId.current !== roundId || deadlineHandoff.current) return;
       try {
-        let result;
+        let result: PoolSnapshot & { ok?: boolean; play_wallet?: number; error?: string };
         try {
-          result = await roomManager.roomIntent({ round_id: roundId, user_id: userId, intent_id: intent.id, action: intent.selecting ? "select" : "unselect", cartela_number: number });
-          if (!result.ok && /room_protocol_disabled|realtime connection unavailable|realtime request timed out/i.test(result.error || "")) throw new Error(result.error || "Realtime fallback");
+          result = await roomManager.roomIntent({ round_id: roundId, user_id: userId, intent_id: requestId, action: selecting ? "select" : "unselect", cartela_number: number });
+          if (!result.ok && /room_protocol_disabled|realtime connection unavailable|realtime request timed out|invalid realtime response/i.test(result.error || "")) throw new Error(result.error || "Realtime fallback");
           if (!result.ok) throw new Error(result.error || "Selection failed");
         } catch (roomError) {
           if (!/room_protocol_disabled|realtime connection unavailable|realtime request timed out|invalid realtime response/i.test(roomError instanceof Error ? roomError.message : "")) throw roomError;
-          result = await (intent.selecting
-            ? playerApi.selectCartela(roundId, userId, number, intent.id)
-            : playerApi.unselectCartela(roundId, userId, number, intent.id));
+          result = await (selecting
+            ? playerApi.selectCartela(roundId, userId, number, requestId)
+            : playerApi.unselectCartela(roundId, userId, number, requestId));
         }
         if (selectionEpoch.current !== epoch || currentRoundId.current !== roundId) return;
-        selectionIntents.current = selectionIntents.current.filter((item) => item.id !== intent.id);
-        const applied = applyPoolSnapshot(result);
-        const authoritative = applied?.authoritative ?? authoritativeSelectedRef.current;
-        const visible = applied?.visible ?? publishSelected(replayIntents(authoritative, selectionIntents.current));
+        applyPoolSnapshot(result);
         if (Number.isFinite(Number(result.play_wallet))) {
           const balance = Number(result.play_wallet);
           setCommittedWallet(balance);
           applyPlayWallet(balance);
-          setWalletPreview(visible.length === authoritative.length ? null : Math.max(0, balance - ((visible.length - authoritative.length) * stake)));
+          setWalletPreview(null);
         }
       } catch (e) {
         if (selectionEpoch.current !== epoch || currentRoundId.current !== roundId) return;
         const message = e instanceof Error ? e.message : "Selection failed";
-        if (/already joined|opening the game board|selection window closed/i.test(message)) {
-          const latest = await playerApi.round(roundId).then((response) => response.round).catch(() => null);
-          if (latest?.id) {
-            const targetId = String(latest.id);
-            const joined = normalizeCartelas(latest.players?.[userId]?.cartelas || []);
-            primeRoundSnapshot(targetId, latest);
-            setExpired(true);
-            if (latest.status === "playing" || joined.length > 0) {
-              abortSelectionQueue();
-              navigate(`/game?round=${encodeURIComponent(targetId)}`, { replace: true });
-            } else {
-              restartSelection();
-            }
-            return;
-          }
+        const latest = /already joined|opening the game board|selection window closed|round not in selecting/i.test(message)
+          ? await playerApi.round(roundId).then((response) => response.round).catch(() => null)
+          : null;
+        const joined = normalizeCartelas(latest?.players?.[userId]?.cartelas || []);
+        if (latest?.id && joined.length > 0) {
+          primeRoundSnapshot(roundId, latest);
+          abortSelectionQueue();
+          setWalletPreview(null);
+          navigate(`/game?round=${encodeURIComponent(roundId)}`, { replace: true });
+          return;
         }
-        selectionIntents.current = selectionIntents.current.filter((item) => item.id !== intent.id);
-        const authoritative = authoritativeSelectedRef.current;
-        publishSelected(replayIntents(authoritative, selectionIntents.current));
-        setWalletPreview(null);
-        setLiveDerashPool(null);
+        if (latest && (latest.status !== "selecting" || roundDeadlinePassed(latest))) {
+          restartSelection();
+          return;
+        }
         setError(message);
+      } finally {
+        if (selectionEpoch.current === epoch && currentRoundId.current === roundId) {
+          mutationNumbers.current.delete(number);
+          setMutatingCards((previous) => { const next = new Set(previous); next.delete(number); return next; });
+        }
       }
     };
-    // Keep server mutations in the same order as taps. The visual selection is
-    // still optimistic, but an older response can no longer overwrite a newer
-    // select/deselect intent when requests complete out of order.
     const operation = selectionTail.current.then(execute);
     selectionTail.current = operation.catch(() => undefined);
     selectionRequests.current.add(operation);
     void operation.finally(() => selectionRequests.current.delete(operation)).catch(() => undefined);
-  }, [applyPoolSnapshot, applyPlayWallet, busy, committedWallet, expired, player?.user_id, publishSelected, restartSelection, round?.id, sharedCartelaCount, stake, taken, wallet]);
+  }, [abortSelectionQueue, applyPlayWallet, applyPoolSnapshot, busy, expired, navigate, player?.user_id, restartSelection, round?.id, taken]);
 
   async function confirmSelection() {
-    if (!selectedRef.current.length || busy || !player?.user_id || !round?.id) return;
+    if (busy || !player?.user_id || !round?.id) return;
     setBusy(true);
     const activeRoundId = String(round.id);
     const userId = String(player.user_id);
@@ -449,7 +421,7 @@ export default function CartelaSelect() {
       if (!committedSelection.length) {
         publishSelected([]);
         setWalletPreview(null);
-        setError("Your cartela selection was released. Please choose again.");
+        restartSelection();
         return;
       }
 
@@ -479,6 +451,10 @@ export default function CartelaSelect() {
         navigate(`/game?round=${encodeURIComponent(activeRoundId)}`, { replace: true });
         return;
       }
+      if (latest && (latest.status !== "selecting" || roundDeadlinePassed(latest))) {
+        restartSelection();
+        return;
+      }
       setError(message);
     } finally {
       if (selectionEpoch.current === epoch) setBusy(false);
@@ -488,14 +464,14 @@ export default function CartelaSelect() {
   return <div className="flex min-h-[calc(100vh-56px)] flex-col bg-[linear-gradient(180deg,#0d0f22_0%,#151833_40%,#0d0f22_100%)]">
     <div className="flex items-center justify-between border-b border-white/5 px-4 pb-2 pt-4"><button onClick={() => navigate("/")} className="flex items-center gap-1 rounded-lg bg-indigo-600/90 px-3.5 py-1.5 text-xs font-bold text-white shadow-md transition-transform active:scale-[0.97]"><ArrowLeft className="h-3.5 w-3.5" /> Back</button><h3 className="text-sm font-bold tracking-wide text-white">Select Cartela</h3><span className="w-[62px]" /></div>
     <div className="flex items-center justify-between gap-1 border-b border-white/5 bg-[#111326]/60 px-4 py-3 text-[11px] font-semibold text-gray-300"><div className="flex gap-2"><Summary label="PLAY WALLET" value={`${displayedWallet.toLocaleString()} ETB`} tone="text-[#34D399]" /><Summary label="STAKE" value={`${stake} ETB`} tone="text-[#FF8C00]" /><Summary label="DERASH POOL" value={`${sharedDerashPool} ETB`} tone="text-[#8B5CF6]" /></div><div className={`relative flex min-w-[68px] items-center justify-center overflow-hidden rounded-lg border px-3.5 py-1.5 ${expired ? "border-amber-400/30 bg-amber-500/15 text-amber-200" : "border-emerald-500/30 bg-emerald-600/20 text-emerald-400"}`}><div className="absolute inset-y-0 left-0 bg-gradient-to-r from-[#10B981] to-[#34D399] opacity-30 transition-[width] duration-300" style={{ width: `${Math.min(100, Math.max(0, (seconds / SELECTION_SECONDS) * 100))}%` }} /><span className="relative z-10 text-[10px] font-black">{expired ? (busy ? "STARTING…" : "CLOSED") : seconds > 0 ? `${seconds}s` : "GO"}</span></div></div>
-    <div className="card-select-grid-enhanced flex-1 overflow-y-auto px-2 py-2 [contain:layout_style]" aria-label="Available cartelas">{!round ? (loading ? <div className="flex items-center justify-center py-16 text-sm text-white/35"><Loader2 className="mr-2 h-4 w-4" /> Finding game…</div> : loadError ? <div className="flex flex-col items-center justify-center gap-3 px-4 py-16 text-center text-xs text-red-300"><p>{loadError}</p><button type="button" onClick={() => { setLoading(true); setLoadError(""); setLoadAttempt((value) => value + 1); }} className="rounded-xl bg-[#FF8C00] px-4 py-2 font-black text-white">Retry</button></div> : null) : <CartelaGrid selected={selected} pending={pending} taken={taken} playerId={String(player?.user_id || "")} onToggle={toggleCard} />}</div>
-    {selected.length > 0 && <div className="sticky bottom-0 z-20 border-t border-orange-400/30 bg-[#0e1026]/95 px-3 py-2 shadow-[0_-10px_25px_rgba(0,0,0,0.35)] backdrop-blur-md"><div className="mb-1 text-center text-[10px] font-black uppercase tracking-[0.2em] text-orange-300">Selected cartelas</div><p className="mb-2 text-center text-[10px] font-semibold text-white/50">Tap a selected cartela to remove it</p><div className="grid grid-cols-2 justify-items-center gap-2">{[0, 1].map((slot) => { const number = selected.find((candidate) => previewSlotByCartela.current.get(candidate) === slot); const card = number === undefined ? undefined : cartelas.find((item) => item.number === number); return number === undefined ? <div key={`empty-slot-${slot}`} className="w-[46%] max-w-[170px]" aria-hidden="true" /> : <button key={number} type="button" onClick={() => void toggleCard(number)} disabled={expired} aria-label={`Remove selected Cartela ${number}`} className="w-[46%] max-w-[170px] rounded-lg text-left transition-transform active:scale-[0.97] disabled:opacity-50"><MiniPreview card={card} /><span className="mt-1 block text-center text-[10px] font-bold text-red-300">Tap to remove</span></button>; })}</div></div>}
+    <div className="card-select-grid-enhanced flex-1 overflow-y-auto px-2 py-2 [contain:layout_style]" aria-label="Available cartelas">{!round ? (loading ? <div className="flex items-center justify-center py-16 text-sm text-white/35"><Loader2 className="mr-2 h-4 w-4" /> Finding game…</div> : loadError ? <div className="flex flex-col items-center justify-center gap-3 px-4 py-16 text-center text-xs text-red-300"><p>{loadError}</p><button type="button" onClick={() => { setLoading(true); setLoadError(""); setLoadAttempt((value) => value + 1); }} className="rounded-xl bg-[#FF8C00] px-4 py-2 font-black text-white">Retry</button></div> : null) : <CartelaGrid selected={selected} pending={pending} taken={taken} mutating={mutatingCards} playerId={String(player?.user_id || "")} onToggle={toggleCard} />}</div>
+    {selected.length > 0 && <div className="sticky bottom-0 z-20 border-t border-orange-400/30 bg-[#0e1026]/95 px-3 py-2 shadow-[0_-10px_25px_rgba(0,0,0,0.35)] backdrop-blur-md"><div className="mb-1 text-center text-[10px] font-black uppercase tracking-[0.2em] text-orange-300">Selected cartelas</div><p className="mb-2 text-center text-[10px] font-semibold text-white/50">Tap a selected cartela to remove it</p><div className="grid grid-cols-2 justify-items-center gap-2">{[0, 1].map((slot) => { const number = selected.find((candidate) => previewSlotByCartela.current.get(candidate) === slot); const card = number === undefined ? undefined : cartelas.find((item) => item.number === number); return number === undefined ? <div key={`empty-slot-${slot}`} className="w-[46%] max-w-[170px]" aria-hidden="true" /> : <button key={number} type="button" onClick={() => void toggleCard(number)} disabled={expired || busy || mutatingCards.has(number)} aria-label={`Remove selected Cartela ${number}`} className="w-[46%] max-w-[170px] rounded-lg text-left transition-transform active:scale-[0.97] disabled:opacity-50"><MiniPreview card={card} /><span className="mt-1 block text-center text-[10px] font-bold text-red-300">Tap to remove</span></button>; })}</div></div>}
     {error && <div className="mx-3 mb-1 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-[11px] text-red-300" role="alert">{error}</div>}
   </div>;
 }
 
 function Summary({ label, value, tone }: { label: string; value: string; tone: string }) { return <div className="flex flex-col justify-center rounded-lg border border-white/5 bg-[#1E2340] px-2 py-1"><span className="text-[9px] leading-none text-gray-500">{label}</span><span className={`mt-0.5 font-bold leading-normal ${tone}`}>{value}</span></div>; }
-const CartelaGrid = memo(function CartelaGrid({ selected, pending, taken, playerId, onToggle }: { selected: number[]; pending: Record<string, number[]>; taken: Set<number>; playerId: string; onToggle: (number: number) => void }) {
+const CartelaGrid = memo(function CartelaGrid({ selected, pending, taken, mutating, playerId, onToggle }: { selected: number[]; pending: Record<string, number[]>; taken: Set<number>; mutating: Set<number>; playerId: string; onToggle: (number: number) => void }) {
   const selectedSet = useMemo(() => new Set(selected), [selected]);
   const pendingTaken = useMemo(() => {
     const next = new Set<number>();
@@ -504,8 +480,9 @@ const CartelaGrid = memo(function CartelaGrid({ selected, pending, taken, player
   }, [pending, playerId]);
   return <div className="grid grid-cols-8 content-start gap-1.5 max-[360px]:grid-cols-7 max-[360px]:gap-1">{CARTELA_POOL.map((card) => {
     const isSelected = selectedSet.has(card.number);
+    const isMutating = mutating.has(card.number);
     const isTaken = !isSelected && (taken.has(card.number) || pendingTaken.has(card.number));
-    return <button key={card.number} disabled={isTaken} onClick={() => onToggle(card.number)} aria-label={`Cartela ${card.number}${isTaken ? ", taken" : isSelected ? ", selected" : ""}`} className={`relative aspect-square rounded-lg border text-[13px] font-extrabold transition-transform active:scale-[0.92] ${isTaken ? "pointer-events-none border-[#FF8C00] bg-[#FF8C00]/25 text-[#FFB45C] shadow-[0_0_12px_rgba(255,140,0,0.35)]" : isSelected ? "z-[1] scale-[1.04] border-emerald-400/60 bg-gradient-to-br from-[#10B981] to-[#059669] text-white shadow-[0_0_16px_rgba(16,185,129,0.45)]" : "border-white/10 bg-gradient-to-br from-[#1E2340] to-[#151833] text-white shadow-[0_2px_8px_rgba(0,0,0,0.3)]"}`}>{isSelected ? <Check className="mx-auto h-4 w-4" /> : isTaken ? <span className="text-[10px]">TAKEN</span> : card.number}</button>;
+    return <button key={card.number} disabled={isTaken || isMutating} onClick={() => onToggle(card.number)} aria-label={`Cartela ${card.number}${isMutating ? ", updating" : isTaken ? ", taken" : isSelected ? ", selected" : ""}`} className={`relative aspect-square rounded-lg border text-[13px] font-extrabold transition-transform active:scale-[0.92] ${isTaken ? "pointer-events-none border-[#FF8C00] bg-[#FF8C00]/25 text-[#FFB45C] shadow-[0_0_12px_rgba(255,140,0,0.35)]" : isSelected ? "z-[1] scale-[1.04] border-emerald-400/60 bg-gradient-to-br from-[#10B981] to-[#059669] text-white shadow-[0_0_16px_rgba(16,185,129,0.45)]" : "border-white/10 bg-gradient-to-br from-[#1E2340] to-[#151833] text-white shadow-[0_2px_8px_rgba(0,0,0,0.3)]"}`}>{isMutating ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : isSelected ? <Check className="mx-auto h-4 w-4" /> : isTaken ? <span className="text-[10px]">TAKEN</span> : card.number}</button>;
   })}</div>;
 });
 function MiniPreview({ card }: { card?: Cartela }) { const values = cardValues(card, card?.number); return <div className="w-full overflow-hidden rounded-lg border-2 border-orange-400 bg-[#1A1A2E] shadow-[0_0_14px_rgba(255,140,0,0.25)]"><div className="bg-gradient-to-r from-[#FF8C00] to-[#FF6B00] py-0.5 text-center text-[7px] font-black tracking-wider text-white">CARTELA NO: {card?.number || "—"}</div><div className="grid grid-cols-5 gap-px">{["B", "I", "N", "G", "O"].map((letter, index) => <div key={letter} className="py-0.5 text-center text-[6px] font-black text-white" style={{ background: ["#3B82F6", "#8B5CF6", "#D946EF", "#10B981", "#F97316"][index] }}>{letter}</div>)}{values.map((number, index) => <div key={`${number}-${index}`} className={`aspect-square text-center text-[6px] font-bold leading-3 ${index === 12 ? "bg-emerald-500 text-white" : "bg-[#151833] text-white/70"}`}>{index === 12 ? "★" : number}</div>)}</div></div>; }

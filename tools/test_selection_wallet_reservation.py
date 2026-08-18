@@ -160,14 +160,15 @@ assert 'lock_timeout_ms=None' in (ROOT / 'firestore_db.py').read_text()
 assert 'pool_snapshot = {' in gateway
 assert '"pending_selections": result.get(\'_pending\', {})' in gateway
 assert '"selected_cartelas": result.get("selected_cartelas", [])' in gateway
-assert 'setLiveDerashPool((previous) =>' in selection
-assert 'previous ?? sharedDerashPool' in selection
+assert 'setMutatingCards' in selection
+assert 'mutationNumbers' in selection
+assert 'setLiveDerashPool((previous) =>' not in selection
 assert "applyPlayWallet" in context
-assert "walletPreview" in selection and "setLiveDerashPool((previous) =>" in selection
+assert "walletPreview" in selection and "setLiveDerashPool(Math.round" in selection
 assert "liveDerashPool" in selection
 assert "pendingRevision" in selection and "applyPoolSnapshot(result)" in selection
-assert "selectionRequests" in selection and "selectionIntents" in selection and "replayIntents" in selection
-assert "queuedCardDelta" in selection and "displayedPool" in selection
+assert "selectionRequests" in selection and "mutationNumbers" in selection and "roomManager.roomIntent" in selection
+assert "queuedCardDelta" not in selection and "displayedPool" not in selection
 assert "applyPoolSnapshot" in selection and "selectionEpoch" in selection
 assert "const CartelaGrid = memo" in selection and "pendingTaken" in selection
 assert "request_id: requestId" in (ROOT / "dashboard-react" / "client" / "src" / "lib" / "gateway.ts").read_text()
