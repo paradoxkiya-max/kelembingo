@@ -30,6 +30,24 @@ from firestore_db import FieldFilter, Increment
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+async def _send_processing_message(message):
+    """Acknowledge slower operations immediately without changing the final response."""
+    try:
+        return await message.reply_text("⏳ Please wait…")
+    except Exception:
+        return None
+
+
+async def _remove_processing_message(message):
+    if message is None:
+        return
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+
 user_manager = UserManager(db)
 _withdraw_locks = {}
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets')
@@ -335,9 +353,12 @@ async def deposit_txn_number(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.effective_message.reply_text(get_bot_text('deposit_invalid_number', db))
         return DEPOSIT_TXN_NUMBER
 
+    processing_message = await _send_processing_message(update.effective_message)
+
     # Check admin online
     admin_online = await _is_admin_online()
     if not admin_online:
+        await _remove_processing_message(processing_message)
         await update.effective_message.reply_text(
             get_bot_text('deposit_admin_offline', db),
             reply_markup=MAIN_KEYBOARD,
@@ -351,6 +372,7 @@ async def deposit_txn_number(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # creator below is the authoritative atomic check for concurrent requests.
     dup = db.collection('deposits').where('transactionId', '==', txn_number).limit(1).get()
     if dup:
+        await _remove_processing_message(processing_message)
         await update.effective_message.reply_text(get_bot_text('deposit_duplicate_txn', db), reply_markup=MAIN_KEYBOARD)
         return ConversationHandler.END
 
@@ -370,6 +392,7 @@ async def deposit_txn_number(update: Update, context: ContextTypes.DEFAULT_TYPE)
     from settlement import create_deposit
     created = create_deposit(db, deposit_data)
     if not created.get("ok"):
+        await _remove_processing_message(processing_message)
         await update.effective_message.reply_text(get_bot_text('deposit_duplicate_txn', db), reply_markup=MAIN_KEYBOARD)
         return ConversationHandler.END
     deposit_id = created["deposit_id"]
@@ -377,6 +400,7 @@ async def deposit_txn_number(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data.pop('deposit_amount', None)
     context.user_data.pop('telebirr_name', None)
 
+    await _remove_processing_message(processing_message)
     await update.effective_message.reply_text(
         get_bot_text('deposit_submitted', db, amount=amount, telebirr_name=telebirr_name, transaction_id=txn_number, deposit_id=deposit_id),
         parse_mode='Markdown', reply_markup=MAIN_KEYBOARD,
@@ -487,6 +511,7 @@ async def withdraw_telebirr_name(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def _process_withdraw(update, context, uid, amount, phone):
+    processing_message = await _send_processing_message(update.effective_message)
     lock = _withdraw_locks.get(uid)
     if lock is None:
         lock = asyncio.Lock()
@@ -495,11 +520,13 @@ async def _process_withdraw(update, context, uid, amount, phone):
     async with lock:
         u = await user_manager.get_user(uid)
         if not u:
+            await _remove_processing_message(processing_message)
             await update.effective_message.reply_text(get_bot_text('play_need_start', db), reply_markup=MAIN_KEYBOARD)
             return ConversationHandler.END
 
         validation = await user_manager.validate_withdrawal(uid, amount)
         if not validation.get('ok'):
+            await _remove_processing_message(processing_message)
             error_key = f"withdraw_{validation.get('error')}"
             kwargs = {k: v for k, v in validation.items() if k not in ('ok', 'error')}
             await update.effective_message.reply_text(get_bot_text(error_key, db, **kwargs))
@@ -524,6 +551,7 @@ async def _process_withdraw(update, context, uid, amount, phone):
         from settlement import create_withdrawal
         created = create_withdrawal(db, withdrawal_data, request_key)
         if not created.get('ok'):
+            await _remove_processing_message(processing_message)
             error_key = f"withdraw_{created.get('error')}"
             await update.effective_message.reply_text(get_bot_text(error_key, db), reply_markup=MAIN_KEYBOARD)
             context.user_data.pop('withdraw_idempotency_key', None)
@@ -531,6 +559,7 @@ async def _process_withdraw(update, context, uid, amount, phone):
         withdrawal_id = created['withdrawal_id']
         context.user_data.pop('withdraw_idempotency_key', None)
 
+    await _remove_processing_message(processing_message)
     await update.effective_message.reply_text(
         get_bot_text('withdraw_submitted', db, amount=amount, phone=phone, withdrawal_id=withdrawal_id),
         reply_markup=MAIN_KEYBOARD, parse_mode='Markdown',
@@ -628,8 +657,8 @@ async def transfer_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def transfer_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     if query.data == "tf_no":
+
         await query.edit_message_text(get_bot_text('transfer_cancelled', db))
         return ConversationHandler.END
 
@@ -637,6 +666,7 @@ async def transfer_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     recipient_id = context.user_data.get('transfer_to')
     amount = context.user_data.get('transfer_amount', 0)
 
+    await query.edit_message_text("⏳ Please wait…")
     success = await user_manager.transfer_funds(
         uid,
         recipient_id,
@@ -691,13 +721,14 @@ async def handle_convert_bonus(update: Update, context: ContextTypes.DEFAULT_TYP
 async def bonus_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     if query.data == "bonus_no":
+
         await query.edit_message_text(get_bot_text('bonus_cancelled', db))
         return ConversationHandler.END
 
     uid = query.from_user.id
     rate = get_config_value("cfg_bonus_to_etb_rate", db, as_type=int)
+    await query.edit_message_text("⏳ Please wait…")
     etb = await user_manager.convert_bonus(
         uid,
         rate,
