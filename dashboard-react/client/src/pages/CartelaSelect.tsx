@@ -122,6 +122,9 @@ export default function CartelaSelect() {
   const lastTapRef = useRef(0);
   const serverOffsetRef = useRef(0);
   const mutationTailsRef = useRef(new Map<number, Promise<void>>());
+  const walletRef = useRef(0);
+  const walletMutationSeqRef = useRef(0);
+  const appliedWalletMutationSeqRef = useRef(0);
   const currentRoundIdRef = useRef("");
 
   const publishSelected = useCallback((numbers: number[]) => {
@@ -130,6 +133,13 @@ export default function CartelaSelect() {
     setSelected(next);
     setActivePreview((previous) => next.includes(previous || 0) ? previous : next[next.length - 1] || null);
   }, []);
+
+  const publishWallet = useCallback((value: number) => {
+    const next = Math.max(0, Number(value) || 0);
+    walletRef.current = next;
+    setWallet(next);
+    applyPlayWallet(next);
+  }, [applyPlayWallet]);
 
   const cleanupSelection = useCallback(() => {
     if (timerRef.current !== null) window.clearInterval(timerRef.current);
@@ -152,10 +162,16 @@ export default function CartelaSelect() {
   const schedulePendingMutation = useCallback((roundId: string, number: number, selecting: boolean, epoch: number) => {
     const tails = mutationTailsRef.current;
     const previous = tails.get(number) || Promise.resolve();
+    const walletMutationSeq = ++walletMutationSeqRef.current;
     const task = previous.catch(() => undefined).then(async () => {
       if (epochRef.current !== epoch || currentRoundIdRef.current !== roundId) return;
-      if (selecting) await playerApi.selectCartela(roundId, userId, number, requestId());
-      else await playerApi.unselectCartela(roundId, userId, number, requestId());
+      const response = selecting
+        ? await playerApi.selectCartela(roundId, userId, number, requestId())
+        : await playerApi.unselectCartela(roundId, userId, number, requestId());
+      if (Number.isFinite(Number(response.play_wallet)) && walletMutationSeq >= appliedWalletMutationSeqRef.current) {
+        appliedWalletMutationSeqRef.current = walletMutationSeq;
+        publishWallet(Number(response.play_wallet));
+      }
     });
     const tracked = task.finally(() => {
       if (tails.get(number) === tracked) tails.delete(number);
@@ -164,6 +180,10 @@ export default function CartelaSelect() {
     void tracked.catch((cause) => {
       if (epochRef.current !== epoch || currentRoundIdRef.current !== roundId) return;
       setError(errorMessage(cause));
+      void playerApi.reconcile().then((result) => {
+        const serverWallet = Number(result.user?.play_wallet);
+        if (Number.isFinite(serverWallet)) publishWallet(serverWallet);
+      }).catch(() => undefined);
       void playerApi.round(roundId).then(({ round: latest }) => {
         if (epochRef.current !== epoch || currentRoundIdRef.current !== roundId) return;
         const latestPending = normalizePending(latest.pending_selections);
@@ -172,7 +192,7 @@ export default function CartelaSelect() {
         setTaken(new Set(normalizeNumbers(latest.taken_cartelas)));
       }).catch(() => undefined);
     });
-  }, [userId]);
+  }, [publishWallet, userId]);
 
   const finishSelection = useCallback(async (epoch: number, selectedAtDeadline: number[], onRetry: () => void) => {
     if (handoffRef.current || epochRef.current !== epoch || !roundRef.current) return;
@@ -243,7 +263,7 @@ export default function CartelaSelect() {
     setPending(pendingRef.current);
     setTaken(new Set(normalizeNumbers(next.taken_cartelas)));
     publishSelected([]);
-    setWallet(walletValue(player?.play_wallet) || 0);
+    publishWallet(walletValue(player?.play_wallet) || 0);
     setDerashPool(Number(next.derash) || calcDerash(Number(next.player_count || 0), pendingRef.current, stake));
     setSeconds(secondsLeft(next, serverOffsetRef.current));
     setLoading(false);
@@ -289,8 +309,7 @@ export default function CartelaSelect() {
       setPending(nextPending);
       setTaken(new Set(normalizeNumbers(message.taken_cartelas)));
       if (Number.isFinite(Number(message.play_wallet))) {
-        setWallet(Number(message.play_wallet));
-        applyPlayWallet(Number(message.play_wallet));
+        publishWallet(Number(message.play_wallet));
       }
       if (Number.isFinite(Number(message.derash_pool))) setDerashPool(Number(message.derash_pool));
     });
@@ -314,7 +333,7 @@ export default function CartelaSelect() {
       unsubscribeRound();
       unsubscribePool();
     };
-  }, [applyPlayWallet, cleanupSelection, finishSelection, navigateToGame, player?.play_wallet, publishSelected, stake, userId]);
+  }, [cleanupSelection, finishSelection, navigateToGame, player?.play_wallet, publishSelected, publishWallet, stake, userId]);
 
   const requestPlayNow = useCallback(async () => {
     if (playRunningRef.current) {
@@ -405,24 +424,26 @@ export default function CartelaSelect() {
     const selecting = !current.includes(number);
     const isOtherTaken = taken.has(number) || otherTaken.has(number);
     if (selecting && (current.length >= MAX_CARTELAS || isOtherTaken)) return;
+    if (selecting && walletRef.current < stake) return;
     const next = selecting ? [...current, number] : current.filter((item) => item !== number);
     publishSelected(next);
+    publishWallet(walletRef.current + (selecting ? -stake : stake));
     setError("");
     schedulePendingMutation(currentRoundIdRef.current, number, selecting, epochRef.current);
-  }, [otherTaken, publishSelected, round, schedulePendingMutation, seconds, taken, transitioning, userId]);
+  }, [otherTaken, publishSelected, publishWallet, round, schedulePendingMutation, seconds, stake, taken, transitioning, userId]);
 
   const playerCount = useMemo(() => {
     const total = new Set<number>(Array.from(taken));
     Object.values(pending).forEach((numbers) => numbers.forEach((number) => total.add(number)));
     return Math.max(Number(round?.player_count || 0), total.size);
   }, [pending, round?.player_count, taken]);
-  const displayWallet = wallet || walletValue(player?.play_wallet) || 0;
+  const displayWallet = wallet;
   const displayDerash = derashPool || calcDerash(playerCount, pending, stake);
   const closed = Boolean(round && (round.status !== "selecting" || seconds <= 0));
 
-  return <div className="relative flex min-h-[calc(100vh-56px)] flex-col overflow-hidden bg-[linear-gradient(180deg,#0d0f22_0%,#151833_40%,#0d0f22_100%)]">
+  return <div className="relative flex h-[calc(100vh-56px)] max-h-[calc(100vh-56px)] flex-col overflow-hidden bg-[linear-gradient(180deg,#0d0f22_0%,#151833_40%,#0d0f22_100%)]">
     <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(180deg,rgba(13,15,34,0.4),rgba(13,15,34,0.1),rgba(13,15,34,0.4))]" />
-    <div className="relative z-10 mx-auto flex min-h-[calc(100vh-56px)] w-full max-w-[420px] flex-col">
+    <div className="relative z-10 mx-auto flex h-full min-h-0 w-full max-w-[420px] flex-col">
       <div className="flex items-center justify-between border-b border-white/5 px-4 pb-2 pt-4">
         <button onClick={() => { cleanupSelection(); navigate("/"); }} className="flex items-center gap-1 rounded-lg bg-indigo-600/90 px-3.5 py-1.5 text-xs font-bold text-white shadow-md transition-all hover:bg-indigo-700"><ArrowLeft className="h-3.5 w-3.5" /> Back</button>
         <h3 className="text-sm font-bold tracking-wide text-white">Select Cartela</h3><span className="w-[62px]" />
@@ -437,8 +458,8 @@ export default function CartelaSelect() {
           const isTaken = !isSelected && (taken.has(number) || otherTaken.has(number));
           return <button key={number} type="button" disabled={closed || isTaken || transitioning} onClick={() => toggleCard(number)} className={`relative flex aspect-square items-center justify-center rounded-lg border text-[13px] font-extrabold transition-all duration-150 active:scale-[0.92] ${isSelected ? "z-10 scale-[1.05] border-emerald-400/60 bg-gradient-to-br from-emerald-500 to-emerald-600 text-white shadow-[0_0_20px_rgba(16,185,129,0.6),0_4px_12px_rgba(16,185,129,0.3)]" : isTaken ? "cursor-not-allowed border-orange-400/30 bg-gradient-to-br from-orange-500 to-orange-600 text-white opacity-85" : "border-white/10 bg-gradient-to-br from-[#1E2340] to-[#151833] text-white shadow-[0_2px_8px_rgba(0,0,0,0.3)]"}`}>{isTaken ? <span className="text-[8px] font-black tracking-[0.04em]">TAKEN</span> : isSelected ? <Check className="h-4 w-4" /> : number}</button>;
         })}</div>
-        {selected.length > 0 && <div className="border-t border-white/5 bg-[#0e1026] px-3 py-2"><div className="flex justify-center gap-2">{selected.map((number) => <MiniPreview key={number} card={cards.find((item) => item.number === number) || fallbackCartela(number)} number={number} active={activePreview === number || (activePreview === null && number === selected[selected.length - 1])} onActivate={() => setActivePreview(number)} onRemove={() => toggleCard(number)} disabled={closed || transitioning} />)}</div></div>}
-        <div className="border-t border-white/5 bg-[#0a0f1d] pb-4"><div className="flex items-center justify-between px-4 py-2 text-xs"><span className="font-semibold text-gray-400">Selected: <span className="font-bold text-emerald-400">{selected.length}/{MAX_CARTELAS}</span> cards</span><span className="font-semibold text-gray-400">Total Cost: <span className="font-bold text-orange-400">{selected.length * stake} ETB</span></span></div><div className="flex gap-3 px-4 py-2"><button onClick={() => { cleanupSelection(); navigate("/"); }} className="flex-1 rounded-xl bg-white/10 py-3 text-sm font-bold text-white transition-all hover:bg-white/20">Cancel</button></div>{error && <div className="px-4 pt-1 text-center text-[11px] text-red-300" role="alert">{error}</div>}</div>
+        {selected.length > 0 && <div className="sticky bottom-0 z-20 shrink-0 border-t border-white/5 bg-[#0e1026]/95 px-3 py-2 shadow-[0_-8px_20px_rgba(0,0,0,0.28)]"><div className="flex justify-center gap-2">{selected.map((number) => <MiniPreview key={number} card={cards.find((item) => item.number === number) || fallbackCartela(number)} number={number} active={activePreview === number || (activePreview === null && number === selected[selected.length - 1])} onActivate={() => setActivePreview(number)} onRemove={() => toggleCard(number)} disabled={closed || transitioning} />)}</div></div>}
+        <div className="shrink-0 border-t border-white/5 bg-[#0a0f1d] pb-4"><div className="flex items-center justify-between px-4 py-2 text-xs"><span className="font-semibold text-gray-400">Selected: <span className="font-bold text-emerald-400">{selected.length}/{MAX_CARTELAS}</span> cards</span><span className="font-semibold text-gray-400">Total Cost: <span className="font-bold text-orange-400">{selected.length * stake} ETB</span></span></div><div className="flex gap-3 px-4 py-2"><button onClick={() => { cleanupSelection(); navigate("/"); }} className="flex-1 rounded-xl bg-white/10 py-3 text-sm font-bold text-white transition-all hover:bg-white/20">Cancel</button></div>{error && <div className="px-4 pt-1 text-center text-[11px] text-red-300" role="alert">{error}</div>}</div>
       </>}
     </div>
   </div>;
