@@ -82,6 +82,8 @@ assert "pending_revision=0" in settlement
 assert "pending_revision" in settlement and "pending_selections" in settlement
 assert "await Promise.allSettled(operations)" in select
 assert "const latest = (await playerApi.round(roundId)).round" in select
+assert "const serverSelected = selectedFromRound(latest, userId)" in select
+assert "const joined = serverSelected.length ? serverSelected : selectedRef.current" in select
 assert "const response = await playerApi.joinRound" in select
 assert "const confirmed = response.round" in select
 assert "roomManager.roomIntent" not in select

@@ -144,7 +144,12 @@ export default function CartelaSelect() {
       if (epochRef.current !== epoch || String(roundRef.current?.id || "") !== roundId) return;
 
       const latest = (await playerApi.round(roundId)).round;
-      const joined = selectedFromRound(latest, userId);
+      const serverSelected = selectedFromRound(latest, userId);
+      // At the exact deadline, the GET snapshot can briefly arrive before the
+      // gateway finalizer publishes pending_selections. The local selection
+      // has already been accepted by the mutation response, so preserve it for
+      // the playing-round join instead of restarting the player on a new round.
+      const joined = serverSelected.length ? serverSelected : selectedRef.current;
       if (latest.status === "playing" && latest.players?.[userId]?.cartelas?.length) {
         navigateToGame(latest);
         return;
