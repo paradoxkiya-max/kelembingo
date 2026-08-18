@@ -11,12 +11,16 @@ assert "function isStaleRoundMessage" in realtime
 assert "revision < previous" in realtime
 assert "if (isStaleRoundMessage(event, message)) return;" in realtime
 assert "warmedRoundCache" in gateway
+assert "function roundSelectionExpired" in gateway
+assert "!roundSelectionExpired(cached.round)" in gateway
 assert "export async function prewarmSelectionRound" in gateway
 assert "prewarmSelectionRound" in game
 assert "useState(SELECTION_SECONDS)" in select
 assert "deadlineSeconds" in select
 assert "refreshHandoff" not in select
 assert "if (joined.length)" in select
+assert "next.status === \"completed\"" in select
+assert "startNewRound(true)" in select
 assert "latest.status === \"playing\"" in select and "void finishSelection(epoch)" in select
 
 print("realtime selection stability contract check: PASS")

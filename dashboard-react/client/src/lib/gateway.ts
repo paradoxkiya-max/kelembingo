@@ -84,12 +84,20 @@ type TransactionDocument = { id?: string; data?: Record<string, unknown>; amount
 const cartelaCache = new Map<number, Cartela>();
 const warmedRoundCache = new Map<number, { round: Round; expiresAt: number }>();
 
+function roundSelectionExpired(round: Round | null | undefined) {
+  if (!round || round.status !== "selecting" || !round.selection_deadline) return false;
+  const deadline = new Date(round.selection_deadline).getTime();
+  return Number.isFinite(deadline) && deadline <= Date.now();
+}
+
 async function createOrReuseRound(stake: number) {
   const cached = warmedRoundCache.get(stake);
-  if (cached && cached.expiresAt > Date.now()) return { round: cached.round };
+  if (cached && cached.expiresAt > Date.now() && !roundSelectionExpired(cached.round)) return { round: cached.round };
   warmedRoundCache.delete(stake);
   const response = await gatewayFetch<{ round: Round }>(`/api/rounds/create?stake=${stake}`, { method: "POST" });
-  if (response.round?.id) warmedRoundCache.set(stake, { round: response.round, expiresAt: Date.now() + 15000 });
+  if (response.round?.id && !roundSelectionExpired(response.round)) {
+    warmedRoundCache.set(stake, { round: response.round, expiresAt: Date.now() + 15000 });
+  }
   return response;
 }
 

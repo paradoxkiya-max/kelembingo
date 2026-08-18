@@ -108,8 +108,7 @@ export default function CartelaSelect() {
     setLoading(false);
   }, [publishSelected, userId]);
 
-  const startNewRound = useCallback((force = false) => {
-    if (busy && !force) return;
+  const startNewRound = useCallback((_force = false) => {
     deadlineStartedRef.current = false;
     setError("");
     setBusy(false);
@@ -122,7 +121,7 @@ export default function CartelaSelect() {
     setDerashOverride(null);
     publishSelected([]);
     setReload((value) => value + 1);
-  }, [busy, publishSelected]);
+  }, [publishSelected]);
 
   const navigateToGame = useCallback((next: Round) => {
     const id = String(next.id || next.round_id || "");
@@ -191,6 +190,15 @@ export default function CartelaSelect() {
         const { round: next } = await playerApi.createRound(stake);
         if (!active || epochRef.current !== epoch) return;
         if (!next) throw new Error("Unable to start the next round.");
+        const nextSelected = selectedFromRound(next, userId);
+        if (nextSelected.length) {
+          navigateToGame(next);
+          return;
+        }
+        if (next.status === "completed" || (next.status === "selecting" && deadlineSeconds(next, serverOffsetRef.current) <= 0)) {
+          startNewRound(true);
+          return;
+        }
         installRound(next, epoch);
         const id = String(next.id || next.round_id || "");
         if (!id) throw new Error("The round has no ID.");
