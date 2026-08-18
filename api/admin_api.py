@@ -22,7 +22,7 @@ from startup_state import is_database_ready
 
 from game.round_engine import RoundEngine, DEFAULT_STAKE, VALID_STAKES, SELECTION_DURATION, GAME_LENGTH_RANGE, _parse_dt, _grid_next_number_at
 from handlers.user_manager import UserManager
-from handlers.bot_content import get_bot_text
+from handlers.bot_content import get_bot_text, get_config_value
 from datetime import datetime, date, timedelta, timezone
 from sqlalchemy import and_, or_, text as sql_text
 from telegram import Bot
