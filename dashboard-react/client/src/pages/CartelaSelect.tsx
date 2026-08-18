@@ -92,9 +92,7 @@ export default function CartelaSelect() {
     selected.forEach((number) => allRoundCartelas.add(Number(number)));
     return Math.max(Number(round?.player_count || 0), allRoundCartelas.size);
   }, [pending, round?.player_count, selected, taken]);
-  const sharedDerashPool = liveDerashPool ?? (round?.status === "playing" && Number.isFinite(Number(round.derash))
-    ? Number(round.derash)
-    : Math.round(sharedCartelaCount * stake * 0.80 * 100) / 100);
+  const sharedDerashPool = liveDerashPool ?? Math.round(sharedCartelaCount * stake * 0.80 * 100) / 100;
 
   const publishSelected = useCallback((next: number[]) => {
     const normalized = normalizeCartelas(next);

@@ -35,6 +35,13 @@ jobs:
           python tools/test_wallet_web_validation_contract.py
           python tools/test_bot_content_sync_contract.py
           python tools/test_bot_content_editor_contract.py
+          python tools/test_room_protocol_contract.py
+          python tools/test_room_protocol_runtime.py
+          python tools/test_selection_wallet_reservation.py
+          python tools/test_selection_deadline_guard.py
+          python tools/test_late_two_cartela_selection.py
+          python tools/test_cross_player_cartela_realtime.py
+          python tools/test_derash_display_accuracy.py
           python tools/test_security_and_worker_contract.py
           python tools/test_database_config_guard.py
           python tools/test_startup_readiness.py

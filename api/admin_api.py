@@ -17,10 +17,10 @@ import json
 import datetime
 import urllib.parse
 from config import db, BOT_TOKEN
-from firestore_db import MockFirestoreClient, SessionLocal, SystemEvent, FieldFilter, Increment, ArrayUnion, engine as db_engine
+from firestore_db import MockFirestoreClient, SessionLocal, SystemEvent, FieldFilter, Increment, ArrayUnion, run_idempotent, engine as db_engine
 from startup_state import is_database_ready
 
-from game.round_engine import RoundEngine, DEFAULT_STAKE, VALID_STAKES, SELECTION_DURATION, GAME_LENGTH_RANGE, _parse_dt, _grid_next_number_at
+from game.round_engine import (RoundEngine, DEFAULT_STAKE, VALID_STAKES, SELECTION_DURATION, GAME_LENGTH_RANGE, TOTAL_CARTELAS, MAX_CARTELAS_PER_PLAYER, DERASH_RATIO, ADMIN_CUT_RATIO, _parse_dt, _grid_next_number_at)
 from handlers.user_manager import UserManager
 from handlers.bot_content import get_bot_text, get_config_value
 from datetime import datetime, date, timedelta, timezone
@@ -581,6 +581,10 @@ def get_server_time():
 # ─── Background game loop state ───
 _active_game_tasks = {}  # round_id -> asyncio.Task
 _user_operation_locks = {}  # user_id -> asyncio.Lock for wallet operations in this process
+ROOM_PROTOCOL_ENABLED = os.getenv("ROOM_PROTOCOL_ENABLED", "true").lower() == "true"
+_room_intent_locks = {}  # round_id -> asyncio.Lock
+_room_intent_results = {}  # round_id -> bounded intent_id -> ack payload
+_ROOM_INTENT_RESULT_LIMIT = 1024
 
 # Realtime delivery state. Direct request handlers and the durable event bridge can
 # observe the same write; identical snapshots are emitted only once per process.
@@ -605,6 +609,7 @@ class JoinRoundRequest(BaseModel):
 class SelectRequest(BaseModel):
     user_id: int
     cartela_number: int
+    request_id: Optional[str] = None
 
 
 class BingoCheckRequest(BaseModel):
@@ -663,7 +668,11 @@ async def _finalize_pending_selections(round_id: str, round_data: dict) -> None:
             continue
         user = await _db(lambda: _read_user_sync(user_id))
         user_name = (user or {}).get('first_name') or (user or {}).get('username') or 'Player'
-        result = await engine.join_round(round_id, user_id, selected, user_name)
+        result = await engine.join_round(
+            round_id, user_id, selected, user_name,
+            require_pending=True,
+            pending_revision=int(round_data.get('pending_revision', 0) or 0),
+        )
         if result.get('error') and result.get('error') != 'You already joined this round':
             logger.info('[GameLoop] pending join skipped for round %s user %s: %s', round_id, user_id, result.get('error'))
 
@@ -675,12 +684,13 @@ async def _start_playing_round(round_id: str, round_data: dict) -> bool:
         return False
     now = datetime.now(tz=timezone.utc)
     round_stake = round_data.get('stake', DEFAULT_STAKE)
-    total_pool = player_count * round_stake
-    derash = total_pool * 0.75
+    total_pool = player_count * float(round_stake or 0)
+    derash = round(total_pool * DERASH_RATIO, 2)
     await _db(lambda: db.collection('rounds').document(round_id).update({
         'status': 'playing',
         'derash': derash,
         'game_started_at': now,
+        'selection_finalized_at': now,
         'next_number_at': now + timedelta(seconds=NUMBER_CALL_INTERVAL),
         'pending_selections': {},
     }))
@@ -723,11 +733,11 @@ async def _game_loop(round_id: str):
                 if datetime.now(tz=timezone.utc) >= dl_dt:
                     # Finalize selections on the gateway rather than waiting for
                     # slow Telegram WebView requests to reach /join after 0s.
-                    await _finalize_pending_selections(round_id, data)
-                    refreshed = await _db(lambda: db.collection('rounds').document(round_id).get())
-                    if not refreshed.exists:
+                    post_start = await _db(lambda: db.collection('rounds').document(round_id).get())
+                    if not post_start.exists:
                         return
-                    refreshed_data = refreshed.to_dict()
+                    await _finalize_pending_selections(round_id, post_start.to_dict())
+                    refreshed_data = post_start.to_dict()
                     if refreshed_data.get('status') != 'selecting':
                         continue
                     if await _start_playing_round(round_id, refreshed_data):
@@ -1150,73 +1160,186 @@ async def join_round(round_id: str, req: JoinRoundRequest, request: Request):
     return result
 
 
+def _selection_deadline_expired(round_data: dict, now: Optional[datetime] = None) -> bool:
+    raw_deadline = round_data.get('selection_deadline') if isinstance(round_data, dict) else None
+    if not raw_deadline:
+        return False
+    if isinstance(raw_deadline, datetime):
+        deadline = raw_deadline
+    elif isinstance(raw_deadline, str):
+        try:
+            deadline = datetime.fromisoformat(raw_deadline.replace('Z', '+00:00'))
+        except ValueError:
+            return False
+    else:
+        return False
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    current = now or datetime.now(tz=timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return current >= deadline
+
+
+def _cartela_pool_snapshot(round_data: dict) -> dict:
+    """Calculate the public pool from committed and pending unique cartelas."""
+    cartelas = set()
+    for number in round_data.get('taken_cartelas', []) or []:
+        try:
+            parsed = int(number)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= parsed <= TOTAL_CARTELAS:
+            cartelas.add(parsed)
+    pending = round_data.get('pending_selections') or {}
+    if isinstance(pending, dict):
+        for numbers in pending.values():
+            for number in numbers or []:
+                try:
+                    parsed = int(number)
+                except (TypeError, ValueError):
+                    continue
+                if 1 <= parsed <= TOTAL_CARTELAS:
+                    cartelas.add(parsed)
+    try:
+        stake = float(round_data.get('stake', DEFAULT_STAKE) or 0)
+    except (TypeError, ValueError):
+        stake = 0.0
+    count = max(int(round_data.get('player_count', 0) or 0), len(cartelas))
+    if round_data.get('status') == 'playing':
+        # Recompute active rounds from the policy constant so stale rounds that
+        # were started by the former 75/25 code cannot display 7.5 for a 10 ETB card.
+        derash = count * stake * DERASH_RATIO
+    else:
+        try:
+            derash = float(round_data.get('derash')) if round_data.get('derash') is not None else count * stake * DERASH_RATIO
+        except (TypeError, ValueError):
+            derash = count * stake * DERASH_RATIO
+    return {'player_count': count, 'derash_pool': round(derash, 2)}
+
+
+def _mutate_pending_selection_sync(round_id: str, user_id: str, cartela_number: int, selecting: bool, request_id: Optional[str] = None) -> dict:
+    """Atomically reserve or release one pending cartela and its stake."""
+    action = 'select' if selecting else 'unselect'
+    safe_request_id = str(request_id or _secrets.token_urlsafe(18))[:96]
+    operation_key = f'pending-{action}:{round_id}:{user_id}:{cartela_number}:{safe_request_id}'
+
+    def _apply(transaction):
+        round_ref = db.collection('rounds').document(str(round_id))
+        snap = transaction.get(round_ref)
+        if not snap.exists:
+            return {'error': 'Round not found'}
+        round_data = snap.to_dict() or {}
+        try:
+            cartela_number_int = int(cartela_number)
+        except (TypeError, ValueError):
+            return {'error': 'Invalid cartela number'}
+        if not 1 <= cartela_number_int <= TOTAL_CARTELAS:
+            return {'error': 'Invalid cartela number'}
+        uid_str = str(user_id)
+        joined_player = (round_data.get('players', {}) or {}).get(uid_str, {}) or {}
+        joined_cartelas = {int(number) for number in (joined_player.get('cartelas', []) or []) if str(number).isdigit() and 1 <= int(number) <= TOTAL_CARTELAS}
+        if joined_cartelas:
+            return {'error': 'Cartela already joined; opening the game board', 'joined_cartelas': sorted(joined_cartelas)}
+        if round_data.get('status') not in ('selecting', None):
+            return {'error': 'Round not in selecting phase'}
+        if _selection_deadline_expired(round_data):
+            return {'error': 'Selection window closed; waiting for round transition'}
+        user_ref = db.collection('users').document(uid_str)
+        user_doc = transaction.get(user_ref)
+        if not user_doc.exists:
+            return {'error': 'Player account not found'}
+        user_data = user_doc.to_dict() or {}
+        # A player may participate in more than one active round. Wallet
+        # reservations are scoped by round and settlement tracks active_round_ids.
+        try:
+            wallet = float(user_data.get('play_wallet', 0) or 0)
+            stake = float(round_data.get('stake', DEFAULT_STAKE) or 0)
+        except (TypeError, ValueError):
+            return {'error': 'Wallet or round stake is invalid'}
+        if not math.isfinite(wallet) or not math.isfinite(stake) or stake <= 0:
+            return {'error': 'Wallet or round stake is invalid'}
+        raw_pending = round_data.get('pending_selections', {}) or {}
+        pending = {str(uid): list(numbers) if isinstance(numbers, list) else [] for uid, numbers in raw_pending.items()} if isinstance(raw_pending, dict) else {}
+        selected = list(dict.fromkeys(int(number) for number in pending.get(uid_str, []) if str(number).isdigit() and 1 <= int(number) <= TOTAL_CARTELAS))
+        raw_reservations = round_data.get('pending_reservations', {}) or {}
+        reservations = {str(uid): list(numbers) if isinstance(numbers, list) else [] for uid, numbers in raw_reservations.items()} if isinstance(raw_reservations, dict) else {}
+        reserved = list(dict.fromkeys(int(number) for number in reservations.get(uid_str, []) if str(number).isdigit() and 1 <= int(number) <= TOTAL_CARTELAS))
+        wallet_changed = False
+        if selecting:
+            if cartela_number_int not in selected:
+                if len(selected) >= MAX_CARTELAS_PER_PLAYER:
+                    return {'error': f'Maximum {MAX_CARTELAS_PER_PLAYER} cartelas allowed'}
+                if cartela_number_int in {int(value) for value in (round_data.get('taken_cartelas', []) or [])}:
+                    return {'error': f'Cartela #{cartela_number_int} is already taken'}
+                for other_uid, numbers in pending.items():
+                    if other_uid != uid_str and cartela_number_int in {int(value) for value in numbers if str(value).isdigit()}:
+                        return {'error': f'Cartela #{cartela_number_int} is already being selected'}
+                if wallet < stake:
+                    return {'error': f'Not enough balance. Need {stake:g} ETB, have {wallet:g} ETB'}
+                selected.append(cartela_number_int)
+                if cartela_number_int not in reserved:
+                    reserved.append(cartela_number_int)
+                    wallet -= stake
+                    wallet_changed = True
+        elif cartela_number_int in selected:
+            selected = [number for number in selected if number != cartela_number_int]
+            if cartela_number_int in reserved:
+                reserved = [number for number in reserved if number != cartela_number_int]
+                wallet += stake
+                wallet_changed = True
+        pending[uid_str] = selected
+        reservations[uid_str] = reserved
+        revision = int(round_data.get('pending_revision', 0) or 0) + 1
+        transaction.update(round_ref, {'pending_selections': pending, 'pending_reservations': reservations, 'pending_revision': revision})
+        if wallet_changed:
+            transaction.update(user_ref, {'play_wallet': round(wallet, 2), 'updated_at': datetime.now(tz=timezone.utc)})
+        pool = _cartela_pool_snapshot({**round_data, 'pending_selections': pending})
+        return {'ok': True, '_pending': pending, '_taken': round_data.get('taken_cartelas', []), '_pc': pool['player_count'], '_derash': pool['derash_pool'], '_revision': revision, 'play_wallet': round(wallet, 2), 'selected_cartelas': selected, 'reserved_cartelas': reserved}
+
+    return run_idempotent(operation_key, f'pending_{action}', _apply, lock_keys=[f"round:{round_id}", f"user:{user_id}"], lock_timeout_ms=2500, statement_timeout_ms=5000)
+
+
 @app.post("/api/rounds/{round_id}/select")
 async def select_cartela(round_id: str, req: SelectRequest, request: Request):
-    """Player taps a cartela during selection phase — mark as pending for others to see."""
+    """Atomically reserve one cartela and its stake for this player."""
     uid_str = str(_actor_user_id(request, req.user_id))
-    def _do_select():
-        snap = db.collection('rounds').document(round_id).get()
-        if not snap.exists:
-            return {"error": "Round not found"}
-        rd = snap.to_dict()
-        if rd.get('status') not in ('selecting', None):
-            return {"error": "Round not in selecting phase"}
-        pending = rd.get('pending_selections', {})
-        if not isinstance(pending, dict):
-            pending = {}
-        user_list = pending.get(uid_str, [])
-        if not isinstance(user_list, list):
-            user_list = []
-        if req.cartela_number not in user_list:
-            user_list.append(req.cartela_number)
-        pending[uid_str] = user_list
-        db.collection('rounds').document(round_id).update({'pending_selections': pending})
-        return {"ok": True, "_pending": pending, "_taken": rd.get('taken_cartelas', []), "_pc": rd.get('player_count', 0)}
-    result = await asyncio.to_thread(_do_select)
+    result = await asyncio.to_thread(_mutate_pending_selection_sync, round_id, uid_str, req.cartela_number, True, req.request_id)
     if 'error' in result:
         raise HTTPException(status_code=400, detail=result['error'])
-    # Broadcast directly with data we already have — no extra DB read
-    await sio.emit('cartela_pool', {
+    pool_snapshot = {
         "type": "cartela_pool",
         "round_id": round_id,
-        "taken_cartelas": result.pop('_taken', []),
-        "player_count": result.pop('_pc', 0),
-        "pending_selections": result.pop('_pending', {}),
-    }, room=f"rounds:{round_id}")
-    return result
+        "taken_cartelas": result.get('_taken', []),
+        "player_count": result.get('_pc', 0),
+        "derash_pool": result.get('_derash', 0),
+        "pending_revision": result.get('_revision', 0),
+        "pending_selections": result.get('_pending', {}),
+    }
+    await sio.emit('cartela_pool', pool_snapshot, room=f"rounds:{round_id}")
+    await broadcast_event('users', uid_str)
+    return {"ok": True, "play_wallet": result.get('play_wallet'), "selected_cartelas": result.get("selected_cartelas", []), "reserved_cartelas": result.get('reserved_cartelas', []), **pool_snapshot}
 
 
 @app.post("/api/rounds/{round_id}/unselect")
 async def unselect_cartela(round_id: str, req: SelectRequest, request: Request):
-    """Player deselects a cartela — remove from pending."""
+    """Atomically release one pending cartela and refund its reservation."""
     uid_str = str(_actor_user_id(request, req.user_id))
-    def _do_unselect():
-        snap = db.collection('rounds').document(round_id).get()
-        if not snap.exists:
-            return {"error": "Round not found"}
-        rd = snap.to_dict()
-        pending = rd.get('pending_selections', {})
-        if not isinstance(pending, dict):
-            pending = {}
-        user_list = pending.get(uid_str, [])
-        if not isinstance(user_list, list):
-            user_list = []
-        if req.cartela_number in user_list:
-            user_list.remove(req.cartela_number)
-        pending[uid_str] = user_list
-        db.collection('rounds').document(round_id).update({'pending_selections': pending})
-        return {"ok": True, "_pending": pending, "_taken": rd.get('taken_cartelas', []), "_pc": rd.get('player_count', 0)}
-    result = await asyncio.to_thread(_do_unselect)
+    result = await asyncio.to_thread(_mutate_pending_selection_sync, round_id, uid_str, req.cartela_number, False, req.request_id)
     if 'error' in result:
         raise HTTPException(status_code=400, detail=result['error'])
-    await sio.emit('cartela_pool', {
+    pool_snapshot = {
         "type": "cartela_pool",
         "round_id": round_id,
-        "taken_cartelas": result.pop('_taken', []),
-        "player_count": result.pop('_pc', 0),
-        "pending_selections": result.pop('_pending', {}),
-    }, room=f"rounds:{round_id}")
-    return result
+        "taken_cartelas": result.get('_taken', []),
+        "player_count": result.get('_pc', 0),
+        "derash_pool": result.get('_derash', 0),
+        "pending_revision": result.get('_revision', 0),
+        "pending_selections": result.get('_pending', {}),
+    }
+    await sio.emit('cartela_pool', pool_snapshot, room=f"rounds:{round_id}")
+    await broadcast_event('users', uid_str)
+    return {"ok": True, "play_wallet": result.get('play_wallet'), "selected_cartelas": result.get("selected_cartelas", []), "reserved_cartelas": result.get('reserved_cartelas', []), **pool_snapshot}
 
 
 @app.post("/api/rounds/{round_id}/close-empty")
@@ -2576,6 +2699,161 @@ async def unsubscribe(sid, data):
     room = (f"player_payments:{data.get('user_id')}" if collection == "player_payments" else (f"{collection}:{doc_id}" if doc_id else collection))
     await sio.leave_room(sid, room)
 
+def _room_intent_lock(round_id: str) -> asyncio.Lock:
+    lock = _room_intent_locks.get(str(round_id))
+    if lock is None:
+        lock = asyncio.Lock()
+        _room_intent_locks[str(round_id)] = lock
+    return lock
+
+
+def _room_state_payload(round_id: str, user_id: str, round_data: Optional[dict] = None) -> dict:
+    if round_data is None:
+        snap = db.collection('rounds').document(str(round_id)).get()
+        if not snap.exists:
+            return {'type': 'room_state', 'round_id': str(round_id), 'exists': False, 'status': 'missing', 'user_id': str(user_id)}
+        round_data = snap.to_dict() or {}
+    pool = _cartela_pool_snapshot(round_data)
+    player = (round_data.get('players', {}) or {}).get(str(user_id), {}) or {}
+    pending_for_user = (round_data.get('pending_selections', {}) or {}).get(str(user_id), []) or {}
+    selected_cartelas = list(player.get('cartelas', []) or []) or list(pending_for_user)
+    round_payload = {'id': str(round_id), **round_data}
+    if round_data.get('status') == 'playing':
+        round_payload['derash'] = pool.get('derash_pool', 0)
+    return {
+        'type': 'room_state',
+        'round_id': str(round_id),
+        'exists': True,
+        'status': round_data.get('status'),
+        'selection_deadline': round_data.get('selection_deadline'),
+        'game_started_at': round_data.get('game_started_at'),
+        'next_number_at': round_data.get('next_number_at'),
+        'called_numbers': round_data.get('called_numbers', []) or [],
+        'last_called_number': round_data.get('last_called_number'),
+        'player_count': pool.get('player_count', 0),
+        'derash_pool': pool.get('derash_pool', 0),
+        'taken_cartelas': round_data.get('taken_cartelas', []) or [],
+        'pending_selections': round_data.get('pending_selections', {}) or {},
+        "pending_revision": int(round_data.get("pending_revision", 0) or 0),
+        'selected_cartelas': selected_cartelas,
+        'player': player,
+        'round': round_payload,
+        'user_id': str(user_id),
+    }
+
+
+async def _emit_room_state(round_id: str, user_id: str, round_data: Optional[dict] = None, sid: Optional[str] = None):
+    payload = await asyncio.to_thread(_room_state_payload, str(round_id), str(user_id), round_data)
+    if sid:
+        await sio.emit("room_state", {
+            **payload,
+        }, to=sid)
+    else:
+        await sio.emit("room_state", payload, room=f'rounds:{round_id}')
+    return payload
+
+
+async def _emit_room_compat_updates(round_id: str, user_id: str, result: dict):
+    pool_snapshot = {
+        'type': 'cartela_pool',
+        'round_id': str(round_id),
+        'taken_cartelas': result.get('_taken', []),
+        'player_count': result.get('_pc', 0),
+        'derash_pool': result.get('_derash', 0),
+        'pending_revision': result.get('_revision', 0),
+        'pending_selections': result.get('_pending', {}),
+    }
+    await sio.emit('cartela_pool', pool_snapshot, room=f'rounds:{round_id}')
+    asyncio.create_task(broadcast_event('users', str(user_id)))
+    asyncio.create_task(broadcast_event('rounds', str(round_id)))
+
+
+@sio.event
+async def room_join(sid, data):
+    data = data or {}
+    round_id = str(data.get('round_id') or '').strip()
+    identity = _socket_identity(data)
+    requested_user = str(data.get('user_id') or '').strip()
+    if not round_id or not identity or identity.get('kind') != 'player':
+        return {'ok': False, 'error': 'Unauthorized room join'}
+    user_id = str(identity.get('user_id'))
+    if requested_user and requested_user != user_id:
+        return {'ok': False, 'error': 'Forbidden room join'}
+    await sio.enter_room(sid, f'rounds:{round_id}')
+    payload = await _emit_room_state(round_id, user_id, sid=sid)
+    return {'ok': bool(payload.get('exists')), **payload}
+
+
+@sio.event
+async def room_leave(sid, data):
+    round_id = str((data or {}).get('round_id') or '').strip()
+    if round_id:
+        await sio.leave_room(sid, f'rounds:{round_id}')
+    return {'ok': True}
+
+
+@sio.event
+async def room_intent(sid, data):
+    data = data or {}
+    round_id = str(data.get('round_id') or '').strip()
+    intent_id = str(data.get('intent_id') or data.get('request_id') or '').strip()[:96]
+    action = str(data.get('action') or '').strip().lower()
+    try:
+        cartela_number = int(data.get('cartela_number'))
+    except (TypeError, ValueError):
+        cartela_number = 0
+    identity = _socket_identity(data)
+    if not ROOM_PROTOCOL_ENABLED:
+        return {'ok': False, 'error': 'room_protocol_disabled', 'intent_id': intent_id}
+    if not round_id or not intent_id or action not in {'select', 'unselect'}:
+        return {'ok': False, 'error': 'Invalid room intent', 'intent_id': intent_id}
+    if not identity or identity.get('kind') != 'player':
+        return {'ok': False, 'error': 'Unauthorized room intent', 'intent_id': intent_id}
+    user_id = str(identity.get('user_id'))
+    requested_user = str(data.get('user_id') or '').strip()
+    if requested_user and requested_user != user_id:
+        return {'ok': False, 'error': 'Forbidden room intent', 'intent_id': intent_id}
+    lock = _room_intent_lock(round_id)
+    async with lock:
+        cache = _room_intent_results.setdefault(round_id, {})
+        cached = cache.get(intent_id)
+        if cached:
+            if str(cached.get('user_id')) != user_id:
+                return {'ok': False, 'error': 'Intent ID already used', 'intent_id': intent_id}
+            await sio.emit("room_ack", cached, to=sid)
+            return cached
+        result = await asyncio.to_thread(_mutate_pending_selection_sync, round_id, user_id, cartela_number, action == 'select', intent_id)
+        ack = {
+            'type': 'room_ack',
+            'ok': 'error' not in result,
+            'intent_id': intent_id,
+            'round_id': round_id,
+            'user_id': user_id,
+            'action': action,
+            'cartela_number': cartela_number,
+            'error': result.get('error'),
+            'play_wallet': result.get('play_wallet'),
+            'selected_cartelas': result.get('selected_cartelas', result.get('joined_cartelas', [])),
+            'reserved_cartelas': result.get('reserved_cartelas', []),
+            'taken_cartelas': result.get('_taken', []),
+            'pending_selections': result.get('_pending', {}),
+            'pending_revision': result.get('_revision', 0),
+            'player_count': result.get('_pc', 0),
+            'derash_pool': result.get('_derash', 0),
+        }
+        cache[intent_id] = ack
+        while len(cache) > _ROOM_INTENT_RESULT_LIMIT:
+            cache.pop(next(iter(cache)))
+        await sio.emit("room_ack", ack, to=sid)
+        if 'error' not in result:
+            await _emit_room_compat_updates(round_id, user_id, result)
+        asyncio.create_task(_emit_room_state(round_id, user_id))
+        state = await asyncio.to_thread(_room_state_payload, round_id, user_id)
+        ack['status'] = state.get('status')
+        ack['round'] = state.get('round')
+        return ack
+
+
 def _snapshot_fingerprint(collection: str, doc_id: str, exists: bool, data):
     """Build a stable, bounded-cost identity for an emitted document snapshot."""
     return json.dumps(
@@ -2607,6 +2885,9 @@ async def broadcast_event(collection: str, doc_id: str):
     async with _realtime_state_lock:
         snap = await asyncio.to_thread(_read_doc)
         snapshot_data = snap.to_dict() if snap.exists else None
+        if collection == 'rounds' and isinstance(snapshot_data, dict) and snapshot_data.get('status') == 'playing':
+            pool = _cartela_pool_snapshot(snapshot_data)
+            snapshot_data = {**snapshot_data, 'derash': pool.get('derash_pool', 0)}
         fingerprint = _snapshot_fingerprint(collection, doc_id, snap.exists, snapshot_data)
         if _last_broadcast_fingerprints.get(cache_key) == fingerprint:
             return False
@@ -2631,6 +2912,18 @@ async def broadcast_event(collection: str, doc_id: str):
             "docs": [{"id": doc_id, "data": snapshot_data}],
         }
         await sio.emit('query_snapshot', query_payload, room=room_collection)
+
+        if collection == "rounds" and doc_id:
+            pool = _cartela_pool_snapshot(snapshot_data or {})
+            await sio.emit('cartela_pool', {
+                'type': 'cartela_pool',
+                'round_id': str(doc_id),
+                'taken_cartelas': (snapshot_data or {}).get('taken_cartelas', []) or [],
+                'player_count': pool.get('player_count', 0),
+                'derash_pool': pool.get('derash_pool', 0),
+                'pending_revision': int((snapshot_data or {}).get('pending_revision', 0) or 0),
+                'pending_selections': (snapshot_data or {}).get('pending_selections', {}) or {},
+            }, room=f'rounds:{doc_id}')
 
         # Player wallet screens subscribe to a private aggregate room instead of
         # exposing deposit/withdrawal collections to a player token.
@@ -2671,11 +2964,20 @@ async def broadcast_cartela_pool(round_id: str):
             "round_id": round_id,
             "taken_cartelas": rd.get('taken_cartelas', []),
             "player_count": rd.get('player_count', 0),
+            "pending_revision": int(rd.get('pending_revision', 0) or 0),
             "pending_selections": rd.get('pending_selections', {}),
         }, room=f"rounds:{round_id}")
 
 
 # ─── Background event broadcaster ───
+def _coalesce_events(events):
+    """Keep only the newest durable event per collection/document pair."""
+    latest_events = {}
+    for ev in events or []:
+        latest_events[(ev.collection, ev.doc_id)] = ev
+    return list(latest_events.values())
+
+
 def _latest_event_cursor():
     """Return the newest durable event so startup does not replay old history."""
     sess = SessionLocal()
@@ -2701,12 +3003,11 @@ async def _event_broadcast_loop():
                 last_created_at,
                 last_event_id,
             )
-            latest_events = {}
             for ev in events:
                 last_created_at = ev.created_at
                 last_event_id = ev.id
-                latest_events[(ev.collection, ev.doc_id)] = ev
-            for ev in latest_events.values():
+            events = _coalesce_events(events)
+            for ev in events:
                 try:
                     await broadcast_event(ev.collection, ev.doc_id)
                 except Exception as ev_err:

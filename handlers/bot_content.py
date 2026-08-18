@@ -25,7 +25,7 @@ DEFAULTS = {
     "welcome_banner_caption": "👋 Welcome to Kelem Bingo! Choose an Option below.",
 
     # ── Play ──
-    "play_wallet_info": "💰 Your Play Wallet: *{play_wallet} ETB*\n\n🎯 Stake: *10 ETB* per cartela (max 2)\n🏆 Derash: *(Cartelas × Stake × 0.75) / Winners*\n\nTap below to open the game:",
+    "play_wallet_info": "💰 Your Play Wallet: *{play_wallet} ETB*\n\n🎯 Stake: *10 ETB* per cartela (max 2)\n🏆 Derash: *(Cartelas × Stake × 0.80) / Winners*\n\nTap below to open the game:",
     "play_need_start": "Please /start first.",
 
     # ── Register ──
@@ -116,7 +116,7 @@ DEFAULTS = {
     "cancel": "Cancelled.",
 
     # ── Instruction ──
-    "instruction": "📖 *How to Play Kelem Bingo*\n\n1️⃣ Tap *Play 🎮* and choose your stake (10 or 20 ETB)\n2️⃣ Pick up to *2 cartelas* during the 35-second selection window\n3️⃣ When the round starts, a new number is called every *5 seconds*\n4️⃣ Mark called numbers on your card — the center is a *free space*\n5️⃣ Complete a full *row, column, or diagonal*, then tap *BINGO* to claim the win!\n\n🏆 *Derash (Prize):* the winner takes *75%* of the total stake pool\n👥 The more players in a round, the bigger the Derash\n\n💰 *Wallets*\n• *Main Wallet* — deposit & withdraw via TeleBirr\n• *Play Wallet* — move funds here to join rounds\n\n🔗 *Invite:* share your link and invite friends to play\n📤 *Transfer:* send funds to another user by ID\n🔄 *Convert Bonus:* turn bonus coins into Play Wallet balance\n\nNeed help? Type /support anytime.",
+    "instruction": "📖 *How to Play Kelem Bingo*\n\n1️⃣ Tap *Play 🎮* and choose your stake (10 or 20 ETB)\n2️⃣ Pick up to *2 cartelas* during the *45-second selection window*\n3️⃣ When the round starts, a new number is called every *5 seconds*\n4️⃣ Mark called numbers on your card — the center is a *free space*\n5️⃣ Complete a full *row, column, or diagonal*, then tap *BINGO* to claim the win!\n\n🏆 *Derash (Prize):* the winner takes *80%* of the total stake pool\n👥 The more players in a round, the bigger the Derash\n\n💰 *Wallets*\n• *Main Wallet* — deposit & withdraw via TeleBirr\n• *Play Wallet* — move funds here to join rounds\n\n🔗 *Invite:* share your link and invite friends to play\n📤 *Transfer:* send funds to another user by ID\n🔄 *Convert Bonus:* turn bonus coins into Play Wallet balance\n\nNeed help? Type /support anytime.",
 
     # ── Admin Confirmations ──
     "admin_deposit_not_found": "❌ Deposit not found.",
