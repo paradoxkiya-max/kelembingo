@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { usePlayer } from "@/contexts/PlayerContext";
-import { formatGatewayError, playerApi, type Transaction } from "@/lib/gateway";
+import { formatGatewayError, formatWithdrawalValidation, playerApi, type Transaction } from "@/lib/gateway";
 import { etb, relativeDate, walletValue } from "@/lib/format";
 import { observePlayerPayments } from "@/lib/realtime";
 
@@ -93,7 +93,7 @@ export default function Wallet() {
     setBusy(true); setFormError("");
     try {
       const validation = await playerApi.validateWithdrawal(player.user_id, amount);
-      if (!validation.ok) return setFormError(validation.message || "Withdrawal is not available right now.");
+      if (!validation.ok) return setFormError(formatWithdrawalValidation(validation));
       setStep(2);
     } catch (error) { setFormError(formatGatewayError(error, "Could not validate this withdrawal.")); }
     finally { setBusy(false); }
@@ -101,7 +101,8 @@ export default function Wallet() {
 
   async function submitDeposit() {
     const name = deposit.name.trim(); const amount = Number(deposit.amount); const transactionId = deposit.transactionId.trim();
-    if (!name || !Number.isFinite(amount) || amount < 10 || transactionId.length < 3) { setFormError("Enter a TeleBirr name, at least 10 ETB, and a valid transaction number."); return; }
+    const minimumAmount = depositConfig.minimum_amount || 10;
+    if (!name || !Number.isFinite(amount) || amount < minimumAmount || transactionId.length < 3) { setFormError(`Enter a TeleBirr name, at least ${minimumAmount} ETB, and a valid transaction number.`); return; }
     setBusy(true);
     try { await playerApi.submitDeposit({ telebirr_name: name, amount, transaction_id: transactionId }); setNotice("Deposit request submitted."); setModal(null); cacheAt.current = 0; await Promise.all([refresh(), loadTransactions()]); }
     catch (error) { setFormError(formatGatewayError(error, "Could not submit deposit")); }
@@ -129,7 +130,9 @@ export default function Wallet() {
 function DepositModal({ step, setStep, values, setValues, config, busy, error, onClose, onSubmit, onNext }: { step: number; setStep: (step: number) => void; values: DepositValues; setValues: (value: DepositValues) => void; config: DepositConfig; busy: boolean; error: string; onClose: () => void; onSubmit: () => void; onNext: () => void }) {
   const back = () => setStep(Math.max(1, step - 1));
   const botText = (key: string, fallback: string) => config.texts?.[key] || fallback;
-  const sendTo = botText('send_to', 'Send {amount} ETB to the configured TeleBirr number, then enter the transaction number from your receipt.').replace('{amount}', values.amount || 'the amount');
+  const sendTo = botText('send_to', 'Send {amount} ETB to the configured TeleBirr number, then enter the transaction number from your receipt.')
+    .replace('{amount}', values.amount || 'the amount')
+    .replace('{phone}', config.phone || 'the configured TeleBirr number');
   return <Modal title="Deposit Funds" subtitle="Use the same three steps as the KelemBingo bot." error={error} onClose={onClose}><PendingCard count={config.pending_count} limit={config.pending_limit} />{step === 1 && <><p className="mt-3 whitespace-pre-line text-xs leading-5 text-white/55">{botText('name_prompt', 'Enter the name registered on your TeleBirr account.')}</p><Field label="1. TeleBirr account name" htmlFor="deposit-name"><Input id="deposit-name" value={values.name} onChange={(event) => setValues({ ...values, name: event.target.value })} placeholder="Name registered on your TeleBirr account" autoComplete="name" className={inputClass} /></Field><ModalActions cancelLabel="Cancel" onCancel={onClose} proceedLabel="Continue" onProceed={onNext} /></>}{step === 2 && <><p className="mt-3 whitespace-pre-line text-xs leading-5 text-white/55">{botText('amount_prompt', 'Enter deposit amount (ETB):')}</p><Field label="2. Amount to send" htmlFor="deposit-amount"><MoneyInput id="deposit-amount" value={values.amount} onChange={(amount) => setValues({ ...values, amount })} min={config.minimum_amount || 10} placeholder="0.00" accent="green" /></Field><p className="mt-3 whitespace-pre-line text-xs leading-5 text-white/40">{botText('minimum_amount', `Minimum deposit is ${config.minimum_amount || 10} ETB.`)}</p><ModalActions cancelLabel="Back" onCancel={back} proceedLabel="Show number" onProceed={onNext} /></>}{step === 3 && <><div className="rounded-xl border border-[#14B8A6]/25 bg-[#14B8A6]/[0.08] p-4"><div className="text-[10px] font-black uppercase tracking-wider text-white/45">3. TeleBirr payment instruction</div><div className="mt-2 whitespace-pre-line text-xs leading-5 text-white/60">{sendTo}</div></div><Field label="Receipt transaction number" htmlFor="deposit-transaction"><Input id="deposit-transaction" value={values.transactionId} onChange={(event) => setValues({ ...values, transactionId: event.target.value })} placeholder="Transaction number from receipt" autoComplete="off" className={inputClass} /></Field><ModalActions cancelLabel="Back" onCancel={back} proceedLabel={busy ? "Submitting…" : "Submit request"} onProceed={onSubmit} disabled={busy} tone="green" /></>}</Modal>;
 }
 

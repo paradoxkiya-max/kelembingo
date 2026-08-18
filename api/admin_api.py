@@ -626,11 +626,13 @@ class DepositConfigResponse(BaseModel):
     admin_online: bool
     pending_count: int
     pending_limit: int
+    minimum_amount: float = 10
+    texts: dict[str, str] = {}
     error: Optional[str] = None
 
 
 class DepositSubmitRequest(BaseModel):
-    user_id: int
+    # The player identity comes from X-Player-Token, never from the request body.
     telebirr_name: str
     amount: float
     transaction_id: str
@@ -1789,12 +1791,24 @@ async def get_deposit_config(user_id: int, request: Request):
     """Return the live web deposit settings and guardrails used by the Telegram bot flow."""
     if _actor_user_id(request, user_id) != user_id:
         raise HTTPException(status_code=403, detail="Forbidden")
-    user, pending_count, admin_online, phone = await asyncio.gather(
+    user, pending_count, admin_online, phone, minimum_amount, name_prompt, amount_prompt, minimum_text, send_to = await asyncio.gather(
         asyncio.to_thread(_read_user_sync, user_id),
         asyncio.to_thread(_get_pending_deposit_count, user_id),
         asyncio.to_thread(_is_admin_online_sync),
         asyncio.to_thread(get_bot_text, 'deposit_phone', db),
+        asyncio.to_thread(get_config_value, 'cfg_min_deposit', db, int),
+        asyncio.to_thread(get_bot_text, 'deposit_ask_name', db),
+        asyncio.to_thread(get_bot_text, 'deposit_ask_amount', db),
+        asyncio.to_thread(get_bot_text, 'deposit_min_amount', db),
+        asyncio.to_thread(get_bot_text, 'deposit_send_to', db, amount='{amount}', phone='{phone}'),
     )
+    minimum_amount = float(minimum_amount or 10)
+    texts = {
+        'name_prompt': name_prompt,
+        'amount_prompt': amount_prompt,
+        'minimum_amount': minimum_text,
+        'send_to': send_to,
+    }
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -1807,6 +1821,8 @@ async def get_deposit_config(user_id: int, request: Request):
             admin_online=admin_online,
             pending_count=pending_count,
             pending_limit=pending_limit,
+            minimum_amount=minimum_amount,
+            texts=texts,
             error='too_many_pending',
         )
 
@@ -1817,6 +1833,8 @@ async def get_deposit_config(user_id: int, request: Request):
             admin_online=admin_online,
             pending_count=pending_count,
             pending_limit=pending_limit,
+            minimum_amount=minimum_amount,
+            texts=texts,
             error='admin_offline',
         )
 
@@ -1826,10 +1844,11 @@ async def get_deposit_config(user_id: int, request: Request):
         admin_online=admin_online,
         pending_count=pending_count,
         pending_limit=pending_limit,
+        minimum_amount=minimum_amount,
+        texts=texts,
     )
-
-
 @app.post("/api/deposits/submit")
+
 async def submit_deposit(req: DepositSubmitRequest, request: Request):
     """Submit a pending deposit request using the same core rules as the Telegram bot flow.
     The user is verified from the player token, never trusted from the body."""

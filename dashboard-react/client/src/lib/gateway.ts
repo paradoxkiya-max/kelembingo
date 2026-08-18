@@ -60,6 +60,25 @@ export type Cartela = { id?: string; number: number; cartela?: number[]; data?: 
 export type CartelaSelection = { ok: boolean; play_wallet?: number; selected_cartelas?: number[]; reserved_cartelas?: number[]; pending_revision?: number; taken_cartelas?: number[]; player_count?: number; derash_pool?: number; pending_selections?: Record<string, number[]> };
 export type DepositConfig = { ok?: boolean; error?: string; message?: string; phone?: string; pending_count?: number; pending_limit?: number; minimum_amount?: number; texts?: Record<string, string> };
 export type WithdrawalValidation = { ok?: boolean; error?: string; message?: string; min?: number; max?: number; balance?: number; min_deposit?: number; current_deposit?: number; limit?: number; minutes?: number; hours?: number };
+
+export function formatWithdrawalValidation(value: WithdrawalValidation): string {
+  if (value.message) return value.message;
+  const messages: Record<string, string> = {
+    invalid_amount: "Enter a valid withdrawal amount.",
+    below_min: `Minimum withdrawal: ${value.min ?? "the configured minimum"} ETB.`,
+    insufficient: "Insufficient game-wallet balance.",
+    above_max: `This exceeds the maximum withdrawal of ${value.max ?? "the configured limit"} ETB.`,
+    no_phone: "Your payout phone is not registered. Register through the Telegram bot first.",
+    no_name: "Enter the name registered on the TeleBirr account.",
+    pending_exists: "You already have a pending withdrawal awaiting review.",
+    account_new: "Your account must be at least one day old before withdrawing.",
+    deposit_required: `You must first have ${value.min_deposit ?? "the required"} ETB in approved deposits.`,
+    daily_limit: `You have reached today’s withdrawal limit of ${value.limit ?? "the configured number of"} request(s).`,
+    cooldown: `Please wait ${value.minutes ?? "a short time"} minute(s) before another withdrawal.`,
+    system_error: "The withdrawal rules could not be checked. Please try again shortly.",
+  };
+  return messages[value.error || ""] || formatGatewayError(value.error, "Withdrawal is not available right now.");
+}
 export type Transaction = { id?: string; type?: string; amount?: number; status?: string; created_at?: string | number; description?: string; reference?: string; telebirr_name?: string; phone?: string };
 type TransactionDocument = { id?: string; data?: Record<string, unknown>; amount?: unknown; status?: unknown; createdAt?: unknown; created_at?: unknown; transactionId?: unknown; transaction_id?: unknown; telebirrName?: unknown; telebirr_name?: unknown; phone?: unknown };
 const cartelaCache = new Map<number, Cartela>();
