@@ -14,7 +14,8 @@ for route in (select_route, unselect_route):
     assert "pending_revision" in route
     assert "pending_selections" in route
     assert "await sio.emit('cartela_pool', pool_snapshot, room=f\"rounds:{round_id}\")" in route
-    assert route.index("await sio.emit('cartela_pool'") < route.index("await broadcast_event('users', uid_str)")
+    assert "asyncio.create_task(broadcast_event('users', uid_str))" in route
+    assert route.index("await sio.emit('cartela_pool'") < route.index("asyncio.create_task(broadcast_event('users', uid_str))")
 
 mutation_start = api.index("def _mutate_pending_selection_sync(")
 mutation_end = api.index('@app.post("/api/rounds/{round_id}/select")', mutation_start)

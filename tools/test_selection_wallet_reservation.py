@@ -148,7 +148,7 @@ assert 'active_round_ids' in gateway
 assert 'active_round_ids' in (ROOT / "settlement.py").read_text()
 assert 'You are already playing in another active round' not in gateway
 assert 'You are already playing in an active round' not in (ROOT / "settlement.py").read_text()
-assert "await broadcast_event('users', uid_str)" in gateway
+assert "asyncio.create_task(broadcast_event('users', uid_str))" in gateway
 assert "derash_pool" in gateway
 assert "require_pending=True" in gateway
 assert "selected_cartelas" in gateway and "pending_revision" in gateway

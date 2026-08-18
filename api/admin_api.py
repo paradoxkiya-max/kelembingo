@@ -1327,7 +1327,9 @@ async def select_cartela(round_id: str, req: SelectRequest, request: Request):
         "pending_selections": result.get('_pending', {}),
     }
     await sio.emit('cartela_pool', pool_snapshot, room=f"rounds:{round_id}")
-    await broadcast_event('users', uid_str)
+    # The mutation response already carries authoritative wallet and pool state;
+    # keep the slower user snapshot fanout off the tap request's critical path.
+    asyncio.create_task(broadcast_event('users', uid_str))
     return {"ok": True, "play_wallet": result.get('play_wallet'), "selected_cartelas": result.get("selected_cartelas", []), "reserved_cartelas": result.get('reserved_cartelas', []), **pool_snapshot}
 
 
@@ -1348,7 +1350,9 @@ async def unselect_cartela(round_id: str, req: SelectRequest, request: Request):
         "pending_selections": result.get('_pending', {}),
     }
     await sio.emit('cartela_pool', pool_snapshot, room=f"rounds:{round_id}")
-    await broadcast_event('users', uid_str)
+    # The mutation response already carries authoritative wallet and pool state;
+    # keep the slower user snapshot fanout off the tap request's critical path.
+    asyncio.create_task(broadcast_event('users', uid_str))
     return {"ok": True, "play_wallet": result.get('play_wallet'), "selected_cartelas": result.get("selected_cartelas", []), "reserved_cartelas": result.get('reserved_cartelas', []), **pool_snapshot}
 
 
