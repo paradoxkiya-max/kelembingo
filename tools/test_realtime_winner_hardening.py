@@ -114,8 +114,10 @@ assert "reconnection" in realtime_source
 assert "unsubscribe" in realtime_source
 assert "subscribeCollection" in realtime_source and "observeAdminCollections" in realtime_source
 assert "observePlayerPayments" in realtime_source and "admin_token" in realtime_source
-assert "collection not in {\"users\", \"payments\"}" in admin_source
-assert "broadcast_player_payment" in admin_source and '"user_id": str(user_id)' in admin_source
+assert "PLAYER_DB_QUERY_COLLECTIONS = {\"deposits\", \"withdrawals\"}" in admin_source
+assert "collection in PLAYER_DB_QUERY_COLLECTIONS" in admin_source
+assert 'collection": "player_payments"' in admin_source
+assert 'room=f"player_payments:{payment_user_id}"' in admin_source
 assert "observePlayer" in player_context and "playerApi.reconcile" in player_context
 assert "observeAdminCollections" in admin_context and "realtimeRevision" in admin_context
 assert "observePlayerPayments" in wallet_source and "cacheAt.current = 0" in wallet_source

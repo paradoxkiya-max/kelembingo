@@ -475,7 +475,9 @@ async def player_auth(req: PlayerAuthRequest):
     if _is_banned_user(user_data):
         raise HTTPException(status_code=403, detail="Account is banned")
     token = _create_player_token(int(user["id"]))
-    await broadcast_event("users", str(user["id"]))
+    # Authentication is complete once the user is upserted and the signed
+    # token is created; do not delay token delivery on realtime fanout.
+    asyncio.create_task(broadcast_event("users", str(user["id"])))
     return {
         "ok": True,
         "token": token,

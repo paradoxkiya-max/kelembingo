@@ -48,6 +48,8 @@ jobs:
           python tools/test_security_and_worker_contract.py
           python tools/test_database_config_guard.py
           python tools/test_startup_readiness.py
+          python tools/test_player_session_cache_contract.py
+          python tools/test_telegram_webapp_contract.py
 
   frontend:
     runs-on: ubuntu-latest
