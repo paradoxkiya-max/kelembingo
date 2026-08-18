@@ -162,6 +162,8 @@ assert '"pending_selections": result.get(\'_pending\', {})' in gateway
 assert '"selected_cartelas": result.get("selected_cartelas", [])' in gateway
 assert 'setMutatingCards' in selection
 assert 'mutationNumbers' in selection
+assert 'mergePendingVisual' in selection
+assert 'const selectionClosed = expired || round?.status !== "selecting" || seconds <= 0;' in selection
 assert 'setLiveDerashPool((previous) =>' not in selection
 assert "applyPlayWallet" in context
 assert "walletPreview" in selection and "setLiveDerashPool(Math.round" in selection
