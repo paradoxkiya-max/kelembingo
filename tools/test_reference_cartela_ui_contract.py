@@ -44,6 +44,10 @@ assert 'if (response.taken_cartelas)' in select
 assert 'if (Number.isFinite(Number(response.play_wallet))' in select
 assert 'const optimisticPending = { ...pendingRef.current, [userId]: next }' in select
 assert 'setDerashPool(calcDerash(Number(roundRef.current?.player_count || 0), optimisticPending, stake))' in select
+assert 'pendingRevisionRef' in select
+assert 'localIntentSeqRef' in select
+assert 'if (latest.status === "selecting" && localAuthorityActive' in select
+assert 'if (localIntentRoundRef.current === id && localIntentSeqRef.current > 0) return;' in select
 assert 'selecting\n        ? await playerApi.selectCartela' in select
 assert ': await playerApi.unselectCartela' in select
 

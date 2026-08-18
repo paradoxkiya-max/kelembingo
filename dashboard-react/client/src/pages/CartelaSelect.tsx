@@ -33,6 +33,10 @@ function normalizeNumbers(value: unknown) {
   return Array.from(new Set(value.map(Number).filter((number) => Number.isInteger(number) && number >= 1 && number <= 500)));
 }
 
+function sameNumbers(left: number[], right: number[]) {
+  return left.length === right.length && left.every((number, index) => number === right[index]);
+}
+
 function normalizePending(value: unknown): PendingMap {
   if (!value || typeof value !== "object") return {};
   return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([uid, numbers]) => [uid, normalizeNumbers(numbers)]));
@@ -127,6 +131,11 @@ export default function CartelaSelect() {
   const walletMutationSeqRef = useRef(0);
   const appliedWalletMutationSeqRef = useRef(0);
   const appliedServerMutationSeqRef = useRef(0);
+  const pendingRevisionRef = useRef(0);
+  const localIntentSeqRef = useRef(0);
+  const localIntentRoundRef = useRef("");
+  const authoritativeSelectionRef = useRef<number[] | null>(null);
+  const authoritativeRoundRef = useRef("");
   const currentRoundIdRef = useRef("");
 
   const publishSelected = useCallback((numbers: number[]) => {
@@ -151,6 +160,10 @@ export default function CartelaSelect() {
     cleanupRef.current = null;
     handoffRef.current = false;
     currentRoundIdRef.current = "";
+    localIntentSeqRef.current = 0;
+    localIntentRoundRef.current = "";
+    authoritativeSelectionRef.current = null;
+    authoritativeRoundRef.current = "";
     roundRef.current = null;
   }, []);
 
@@ -166,17 +179,27 @@ export default function CartelaSelect() {
     const tails = mutationTailsRef.current;
     const previous = tails.get(number) || Promise.resolve();
     const walletMutationSeq = ++walletMutationSeqRef.current;
+    const intentSeq = localIntentSeqRef.current;
     const task = previous.catch(() => undefined).then(async () => {
       if (epochRef.current !== epoch || currentRoundIdRef.current !== roundId) return;
       const response = selecting
         ? await playerApi.selectCartela(roundId, userId, number, requestId())
         : await playerApi.unselectCartela(roundId, userId, number, requestId());
+      const isLatestIntent = intentSeq === localIntentSeqRef.current && localIntentRoundRef.current === roundId;
+      if (!isLatestIntent) return;
+      const responseRevision = Number(response.pending_revision || 0);
+      if (Number.isFinite(responseRevision) && responseRevision < pendingRevisionRef.current) return;
       if (response.pending_selections) {
         const nextPending = normalizePending(response.pending_selections);
         pendingRef.current = nextPending;
         setPending(nextPending);
       }
       if (response.taken_cartelas) setTaken(new Set(normalizeNumbers(response.taken_cartelas)));
+      if (Number.isFinite(responseRevision)) pendingRevisionRef.current = Math.max(pendingRevisionRef.current, responseRevision);
+      authoritativeSelectionRef.current = [...selectedRef.current];
+      authoritativeRoundRef.current = roundId;
+      localIntentSeqRef.current = 0;
+      localIntentRoundRef.current = "";
       if (walletMutationSeq >= appliedServerMutationSeqRef.current) {
         appliedServerMutationSeqRef.current = walletMutationSeq;
         if (Number.isFinite(Number(response.derash_pool))) setDerashPool(Number(response.derash_pool));
@@ -191,7 +214,7 @@ export default function CartelaSelect() {
     });
     tails.set(number, tracked);
     void tracked.catch((cause) => {
-      if (epochRef.current !== epoch || currentRoundIdRef.current !== roundId) return;
+      if (epochRef.current !== epoch || currentRoundIdRef.current !== roundId || intentSeq !== localIntentSeqRef.current) return;
       setError(errorMessage(cause));
       void playerApi.reconcile().then((result) => {
         const serverWallet = Number(result.user?.play_wallet);
@@ -272,6 +295,11 @@ export default function CartelaSelect() {
     currentRoundIdRef.current = id;
     roundRef.current = next;
     pendingRef.current = normalizePending(next.pending_selections);
+    pendingRevisionRef.current = Number(next.pending_revision || 0);
+    localIntentSeqRef.current = 0;
+    localIntentRoundRef.current = "";
+    authoritativeSelectionRef.current = null;
+    authoritativeRoundRef.current = "";
     setRound(next);
     setPending(pendingRef.current);
     setTaken(new Set(normalizeNumbers(next.taken_cartelas)));
@@ -286,7 +314,12 @@ export default function CartelaSelect() {
 
     const applyRound = (latest: Round | null) => {
       if (!latest || epochRef.current !== epoch || currentRoundIdRef.current !== id) return;
+      const latestRevision = Number(latest.pending_revision || 0);
+      if (latestRevision < pendingRevisionRef.current) return;
+      const localIntentActive = localIntentRoundRef.current === id && localIntentSeqRef.current > 0;
       const mine = roundSelections(latest, userId);
+      const localAuthorityActive = authoritativeRoundRef.current === id && authoritativeSelectionRef.current !== null;
+      if (latest.status === "selecting" && localAuthorityActive && latestRevision <= pendingRevisionRef.current && !sameNumbers(mine, authoritativeSelectionRef.current || [])) return;
       if (latest.status === "completed" || latest.status === "cancelled") {
         cleanupSelection();
         setLoading(true);
@@ -306,6 +339,8 @@ export default function CartelaSelect() {
         }
         return;
       }
+      if (localIntentActive) return;
+      pendingRevisionRef.current = latestRevision;
       roundRef.current = latest;
       setRound(latest);
       pendingRef.current = normalizePending(latest.pending_selections);
@@ -319,7 +354,14 @@ export default function CartelaSelect() {
     const unsubscribeRound = observeRound(id, applyRound, { fetchInitial: false });
     const unsubscribePool = observeCartelaPool(id, (message: PoolMessage) => {
       if (epochRef.current !== epoch || currentRoundIdRef.current !== id) return;
+      const revision = Number(message.pending_revision || 0);
+      if (revision < pendingRevisionRef.current) return;
+      if (localIntentRoundRef.current === id && localIntentSeqRef.current > 0) return;
       const nextPending = normalizePending(message.pending_selections);
+      const messageMine = nextPending[userId] || [];
+      const localAuthorityActive = authoritativeRoundRef.current === id && authoritativeSelectionRef.current !== null;
+      if (localAuthorityActive && revision <= pendingRevisionRef.current && !sameNumbers(messageMine, authoritativeSelectionRef.current || [])) return;
+      pendingRevisionRef.current = revision;
       pendingRef.current = nextPending;
       setPending(nextPending);
       setTaken(new Set(normalizeNumbers(message.taken_cartelas)));
@@ -442,6 +484,8 @@ export default function CartelaSelect() {
     if (selecting && walletRef.current < stake) return;
     const next = selecting ? [...current, number] : current.filter((item) => item !== number);
     const optimisticPending = { ...pendingRef.current, [userId]: next };
+    localIntentSeqRef.current += 1;
+    localIntentRoundRef.current = currentRoundIdRef.current;
     pendingRef.current = optimisticPending;
     setPending(optimisticPending);
     setDerashPool(calcDerash(Number(roundRef.current?.player_count || 0), optimisticPending, stake));
