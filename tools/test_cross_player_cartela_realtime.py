@@ -23,10 +23,11 @@ mutation = api[mutation_start:mutation_end]
 assert "transaction.update(round_ref" in mutation
 assert "pending_revision" in mutation
 cartela_source = (ROOT / "dashboard-react/client/src/pages/CartelaSelect.tsx").read_text()
-assert "revisionRef" in cartela_source
-assert "if (revision < revisionRef.current) return;" in cartela_source
-assert "if (!inFlightRef.current.size) publishSelected" in cartela_source
+assert "pendingRef" in cartela_source
+assert "otherPendingNumbers" in cartela_source
+assert "setTaken(new Set(normalizeNumbers(message.taken_cartelas)))" in cartela_source
 assert "observeCartelaPool" in cartela_source
+assert "if (!selectedRef.current.length && mine.length) publishSelected(mine)" in cartela_source
 
 # Model the reported ordering: revision 13 releases card 12, then an older
 # revision 12 full snapshot arrives. The older snapshot must be rejected.

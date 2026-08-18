@@ -28,6 +28,7 @@ assert 'ROUND_SNAPSHOT_CACHE_LIMIT = 32' in realtime and 'if (cached) deliver(ca
 assert 'playerApi.selectCartela(roundId, userId, number, requestId())' in select
 assert 'playerApi.unselectCartela(roundId, userId, number, requestId())' in select
 assert 'selectionQueue' not in select
-assert 'pendingOperationsRef' in select
+assert 'mutationTailsRef' in select
+assert 'Promise.allSettled(tails)' in select
 
 print("reference-inspired room protocol contract check: PASS")

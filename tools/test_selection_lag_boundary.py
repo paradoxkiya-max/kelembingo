@@ -7,11 +7,12 @@ source = (ROOT / "dashboard-react/client/src/pages/CartelaSelect.tsx").read_text
 assert "playerApi.selectCartela(roundId, userId, number, requestId())" in source
 assert "playerApi.unselectCartela(roundId, userId, number, requestId())" in source
 assert "roomManager.roomIntent" not in source
-assert "pendingOperationsRef" in source
-assert "await Promise.allSettled(operations)" in source
+assert "mutationTailsRef" in source
+assert "Promise.allSettled(tails)" in source
+assert "lastTapRef" in source and "now - lastTapRef.current < 300" in source
 assert "const selectionClosed" not in source
-assert "setSeconds(0)" in source
-assert "void finishSelection(epoch)" in source
+assert "setSeconds(remaining)" in source
+assert "finishSelection(epoch, selectedRef.current, onRetry)" in source
 assert "observeCartelaPool" in source
 assert "observeRound" in source
 
@@ -46,6 +47,7 @@ assert 45_000 - last_mutation_at == 700
 # A stale visual state cannot be treated as a committed join; the latest round
 # snapshot and pending revision are read before join confirmation.
 assert "const latest = (await playerApi.round(roundId)).round" in source
+assert "const serverSnapshot = roundSelections(latest, userId)" in source
 assert "pendingRevision: Number(latest.pending_revision || 0)" in source
 
 print("minimal direct-tap and 45-second boundary regression: PASS")

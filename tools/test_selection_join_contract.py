@@ -80,10 +80,10 @@ assert "pending_revision=int(req.pending_revision or 0)" in admin_api
 assert "pending_revision=pending_revision" in engine
 assert "pending_revision=0" in settlement
 assert "pending_revision" in settlement and "pending_selections" in settlement
-assert "await Promise.allSettled(operations)" in select
+assert "await Promise.allSettled(tails)" in select
 assert "const latest = (await playerApi.round(roundId)).round" in select
-assert "const serverSelected = selectedFromRound(latest, userId)" in select
-assert "const joined = serverSelected.length ? serverSelected : selectedRef.current" in select
+assert "const serverSnapshot = roundSelections(latest, userId)" in select
+assert "const joinSelection = (serverSnapshot.length ? serverSnapshot : snapshot)" in select
 assert "const response = await playerApi.joinRound" in select
 assert "const confirmed = response.round" in select
 assert "roomManager.roomIntent" not in select
@@ -91,9 +91,9 @@ assert "navigate(`/game?round=${encodeURIComponent(id)}`" in select
 assert "pendingRevision: Number(latest.pending_revision || 0)" in select
 assert "requirePending: true" in select
 assert "refreshHandoff" not in select
-assert "if (joined.length)" in select
-assert "if (latest.status === \"playing\")" in select and "void finishSelection(epoch)" in select
-assert "if (committed.length && joined.every" in select
+assert "if (hasPlayerEntry(latest, userId))" in select
+assert "if (latest.status === \"playing\")" in select and "navigateToGame(latest)" in select
+assert "if (confirmed.players?.[userId]?.cartelas?.length || response.ok)" in select
 
 print("selection/join synchronization regression check: PASS")
 

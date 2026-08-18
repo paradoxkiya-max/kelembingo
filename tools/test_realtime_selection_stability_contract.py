@@ -15,12 +15,13 @@ assert "function roundSelectionExpired" in gateway
 assert "!roundSelectionExpired(cached.round)" in gateway
 assert "export async function prewarmSelectionRound" in gateway
 assert "prewarmSelectionRound" in game
-assert "useState(SELECTION_SECONDS)" in select
-assert "deadlineSeconds" in select
+assert "SELECTION_DURATION = 45" in select
+assert "secondsLeft" in select
 assert "refreshHandoff" not in select
-assert "if (joined.length)" in select
-assert "next.status === \"completed\"" in select
-assert "startNewRound(true)" in select
-assert "latest.status === \"playing\"" in select and "void finishSelection(epoch)" in select
+assert "hasPlayerEntry(latest, userId)" in select
+assert "cleanupSelection()" in select
+assert "requestPlayNow" in select
+assert "latest.status === \"playing\"" in select and "navigateToGame(latest)" in select
+assert "lastTapRef" in select and "mutationTailsRef" in select
 
 print("realtime selection stability contract check: PASS")
