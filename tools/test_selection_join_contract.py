@@ -88,6 +88,9 @@ assert "primeRoundSnapshot(activeRoundId, handoffRound)" not in select
 assert "navigate(`/game?round=${encodeURIComponent(activeRoundId)}`" in select
 assert "pendingRevision: Number(latest.pending_revision || 0)" in select
 assert "requirePending: true" in select
+assert "refreshHandoff" not in select
+assert "if (joinedCartelas.length > 0 || (latest.status === \"playing\" && !confirmStarted.current))" in select
+assert "if (latest?.id && joined.length > 0)" in select
 
 print("selection/join synchronization regression check: PASS")
 

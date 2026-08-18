@@ -246,7 +246,7 @@ export default function CartelaSelect() {
           // A joined player must never remain on the selection grid. The
           // players snapshot can arrive just before the status=playing snapshot,
           // so redirect on either signal without waiting for another event.
-          if (latest.status === "playing" || joinedCartelas.length > 0) {
+          if (joinedCartelas.length > 0 || (latest.status === "playing" && !confirmStarted.current)) {
             const targetId = String(latest.id || nextRound.id);
             abortSelectionQueue();
             primeRoundSnapshot(targetId, latest);
@@ -317,30 +317,6 @@ export default function CartelaSelect() {
       restartSelection();
     }
   }, [restartSelection, round?.id, seconds, selected.length]);
-
-  useEffect(() => {
-    if (!expired || !round?.id || round.status !== "selecting") return;
-    let active = true;
-    const refreshHandoff = () => {
-      void playerApi.round(String(round.id)).then(({ round: latest }) => {
-        if (!active) return;
-        if (latest.status === "playing") {
-          const targetId = String(latest.id || round.id);
-          abortSelectionQueue();
-          primeRoundSnapshot(targetId, latest);
-          navigate(`/game?round=${encodeURIComponent(targetId)}`, { replace: true });
-        } else if (latest.status === "completed") {
-          restartSelection();
-        }
-      }).catch(() => undefined);
-    };
-    // Realtime round snapshots normally perform the handoff immediately. These
-    // sparse retries are only a recovery path for a missed Socket.IO event;
-    // avoid issuing 30 requests per player at the deadline.
-    refreshHandoff();
-    const retryTimers = [1000, 2500, 5000].map((delay) => window.setTimeout(refreshHandoff, delay));
-    return () => { active = false; retryTimers.forEach((timer) => window.clearTimeout(timer)); };
-  }, [expired, navigate, round?.id, round?.status]);
 
   useEffect(() => {
     const missing = selected.filter((number) => !cartelas.some((card) => card.number === number) && !previewFetches.current.has(number));
@@ -450,7 +426,7 @@ export default function CartelaSelect() {
       const latest = await playerApi.round(activeRoundId).then((response) => response.round);
       if (!latest?.id) throw new Error("Round is no longer available");
       const joinedAlready = normalizeCartelas(latest.players?.[userId]?.cartelas || []);
-      if (latest.status === "playing" || joinedAlready.length > 0) {
+      if (joinedAlready.length > 0) {
         primeRoundSnapshot(activeRoundId, latest);
         abortSelectionQueue();
         setWalletPreview(null);
@@ -486,7 +462,7 @@ export default function CartelaSelect() {
       const message = e instanceof Error ? e.message : "Could not join the round";
       const latest = await playerApi.round(activeRoundId).then((response) => response.round).catch(() => null);
       const joined = normalizeCartelas(latest?.players?.[userId]?.cartelas || []);
-      if (latest?.id && (latest.status === "playing" || joined.length > 0)) {
+      if (latest?.id && joined.length > 0) {
         primeRoundSnapshot(activeRoundId, latest);
         abortSelectionQueue();
         setWalletPreview(null);
