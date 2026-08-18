@@ -6,6 +6,7 @@ import { useLocation, useSearch } from "wouter";
 import { usePlayer } from "@/contexts/PlayerContext";
 import { playerApi, type Cartela, type Round } from "@/lib/gateway";
 import { walletValue } from "@/lib/format";
+import { cardValues, fallbackCartela, isValidCartela } from "@/lib/cartelaFallback";
 import { observeCartelaPool, observeRealtimeReconnect, observeRound, primeRoundSnapshot, roomManager } from "@/lib/realtime";
 
 const STAKES = [10, 20];
@@ -323,9 +324,17 @@ export default function CartelaSelect() {
     if (!missing.length) return;
     let active = true;
     missing.forEach((number) => previewFetches.current.add(number));
-    Promise.all(missing.map((number) => playerApi.cartela(number).then((response) => response.cartela)))
-      .then((items) => { if (active) setCartelas((old) => [...old.filter((card) => !items.some((item) => item.number === card.number)), ...items]); })
-      .catch(() => { if (active) setError("A selected cartela preview could not be loaded. You can still continue safely."); });
+    // Render the exact deterministic backend card immediately. The server
+    // response remains authoritative and will replace this fallback below.
+    setCartelas((old) => [...old, ...missing.map((number) => fallbackCartela(number))]);
+    Promise.all(missing.map(async (number) => ({ number, card: (await playerApi.cartela(number)).cartela })))
+      .then((items) => {
+        if (!active) return;
+        const validItems = items.filter(({ number, card }) => isValidCartela(card, number)).map(({ card }) => card as Cartela);
+        if (validItems.length) setCartelas((old) => [...old.filter((card) => !validItems.some((item) => item.number === card.number)), ...validItems]);
+        if (validItems.length < missing.length) setError("Showing the verified local cartela while the server card is unavailable.");
+      })
+      .catch(() => { if (active) setError("Showing the verified local cartela while the server card is unavailable."); });
     return () => { active = false; };
   }, [cartelas, selected]);
 
@@ -498,6 +507,6 @@ const CartelaGrid = memo(function CartelaGrid({ selected, pending, taken, player
     return <button key={card.number} disabled={isTaken} onClick={() => onToggle(card.number)} aria-label={`Cartela ${card.number}${isTaken ? ", taken" : isSelected ? ", selected" : ""}`} className={`relative aspect-square rounded-lg border text-[13px] font-extrabold transition-transform active:scale-[0.92] ${isTaken ? "pointer-events-none border-[#FF8C00] bg-[#FF8C00]/25 text-[#FFB45C] shadow-[0_0_12px_rgba(255,140,0,0.35)]" : isSelected ? "z-[1] scale-[1.04] border-emerald-400/60 bg-gradient-to-br from-[#10B981] to-[#059669] text-white shadow-[0_0_16px_rgba(16,185,129,0.45)]" : "border-white/10 bg-gradient-to-br from-[#1E2340] to-[#151833] text-white shadow-[0_2px_8px_rgba(0,0,0,0.3)]"}`}>{isSelected ? <Check className="mx-auto h-4 w-4" /> : isTaken ? <span className="text-[10px]">TAKEN</span> : card.number}</button>;
   })}</div>;
 });
-function MiniPreview({ card }: { card?: Cartela }) { const values = flattenCartela(card); return <div className="w-full overflow-hidden rounded-lg border-2 border-orange-400 bg-[#1A1A2E] shadow-[0_0_14px_rgba(255,140,0,0.25)]"><div className="bg-gradient-to-r from-[#FF8C00] to-[#FF6B00] py-0.5 text-center text-[7px] font-black tracking-wider text-white">CARTELA NO: {card?.number || "—"}</div><div className="grid grid-cols-5 gap-px">{["B", "I", "N", "G", "O"].map((letter, index) => <div key={letter} className="py-0.5 text-center text-[6px] font-black text-white" style={{ background: ["#3B82F6", "#8B5CF6", "#D946EF", "#10B981", "#F97316"][index] }}>{letter}</div>)}{values.map((number, index) => <div key={`${number}-${index}`} className={`aspect-square text-center text-[6px] font-bold leading-3 ${index === 12 ? "bg-emerald-500 text-white" : "bg-[#151833] text-white/70"}`}>{index === 12 ? "★" : number}</div>)}</div></div>; }
+function MiniPreview({ card }: { card?: Cartela }) { const values = cardValues(card, card?.number); return <div className="w-full overflow-hidden rounded-lg border-2 border-orange-400 bg-[#1A1A2E] shadow-[0_0_14px_rgba(255,140,0,0.25)]"><div className="bg-gradient-to-r from-[#FF8C00] to-[#FF6B00] py-0.5 text-center text-[7px] font-black tracking-wider text-white">CARTELA NO: {card?.number || "—"}</div><div className="grid grid-cols-5 gap-px">{["B", "I", "N", "G", "O"].map((letter, index) => <div key={letter} className="py-0.5 text-center text-[6px] font-black text-white" style={{ background: ["#3B82F6", "#8B5CF6", "#D946EF", "#10B981", "#F97316"][index] }}>{letter}</div>)}{values.map((number, index) => <div key={`${number}-${index}`} className={`aspect-square text-center text-[6px] font-bold leading-3 ${index === 12 ? "bg-emerald-500 text-white" : "bg-[#151833] text-white/70"}`}>{index === 12 ? "★" : number}</div>)}</div></div>; }
 function normalizeCartelas(values: unknown) { return Array.isArray(values) ? Array.from(new Set(values.map(Number).filter((value) => Number.isInteger(value) && value >= 1 && value <= 500))).slice(0, MAX_SELECTIONS) : []; }
 function flattenCartela(card?: Cartela) { const source: unknown = card?.cartela || card?.data || card?.grid || []; const values = Array.isArray(source) && Array.isArray(source[0]) ? (source as number[][]).reduce<number[]>((all, row) => all.concat(row), []) : Array.isArray(source) ? source as number[] : []; return values.length === 25 ? values : Array.from({ length: 25 }, (_, index) => index + 1); }
