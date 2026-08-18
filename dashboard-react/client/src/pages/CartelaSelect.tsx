@@ -126,6 +126,7 @@ export default function CartelaSelect() {
   const walletInitializedRef = useRef(false);
   const walletMutationSeqRef = useRef(0);
   const appliedWalletMutationSeqRef = useRef(0);
+  const appliedServerMutationSeqRef = useRef(0);
   const currentRoundIdRef = useRef("");
 
   const publishSelected = useCallback((numbers: number[]) => {
@@ -176,10 +177,13 @@ export default function CartelaSelect() {
         setPending(nextPending);
       }
       if (response.taken_cartelas) setTaken(new Set(normalizeNumbers(response.taken_cartelas)));
-      if (Number.isFinite(Number(response.derash_pool))) setDerashPool(Number(response.derash_pool));
-      if (Number.isFinite(Number(response.play_wallet)) && walletMutationSeq >= appliedWalletMutationSeqRef.current) {
-        appliedWalletMutationSeqRef.current = walletMutationSeq;
-        publishWallet(Number(response.play_wallet));
+      if (walletMutationSeq >= appliedServerMutationSeqRef.current) {
+        appliedServerMutationSeqRef.current = walletMutationSeq;
+        if (Number.isFinite(Number(response.derash_pool))) setDerashPool(Number(response.derash_pool));
+        if (Number.isFinite(Number(response.play_wallet)) && walletMutationSeq >= appliedWalletMutationSeqRef.current) {
+          appliedWalletMutationSeqRef.current = walletMutationSeq;
+          publishWallet(Number(response.play_wallet));
+        }
       }
     });
     const tracked = task.finally(() => {
@@ -437,6 +441,10 @@ export default function CartelaSelect() {
     if (selecting && (current.length >= MAX_CARTELAS || isOtherTaken)) return;
     if (selecting && walletRef.current < stake) return;
     const next = selecting ? [...current, number] : current.filter((item) => item !== number);
+    const optimisticPending = { ...pendingRef.current, [userId]: next };
+    pendingRef.current = optimisticPending;
+    setPending(optimisticPending);
+    setDerashPool(calcDerash(Number(roundRef.current?.player_count || 0), optimisticPending, stake));
     publishSelected(next);
     publishWallet(walletRef.current + (selecting ? -stake : stake));
     setError("");

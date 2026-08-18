@@ -42,6 +42,8 @@ assert 'playerApi.unselectCartela(roundId, userId, number, requestId())' in sele
 assert 'if (response.pending_selections)' in select
 assert 'if (response.taken_cartelas)' in select
 assert 'if (Number.isFinite(Number(response.play_wallet))' in select
+assert 'const optimisticPending = { ...pendingRef.current, [userId]: next }' in select
+assert 'setDerashPool(calcDerash(Number(roundRef.current?.player_count || 0), optimisticPending, stake))' in select
 assert 'selecting\n        ? await playerApi.selectCartela' in select
 assert ': await playerApi.unselectCartela' in select
 
