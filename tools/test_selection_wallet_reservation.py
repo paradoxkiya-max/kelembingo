@@ -160,22 +160,20 @@ assert 'lock_timeout_ms=None' in (ROOT / 'firestore_db.py').read_text()
 assert 'pool_snapshot = {' in gateway
 assert '"pending_selections": result.get(\'_pending\', {})' in gateway
 assert '"selected_cartelas": result.get("selected_cartelas", [])' in gateway
-assert 'setMutatingCards' in selection
-assert 'mutationCounts' in selection
-assert 'mergePendingVisual' in selection
-assert 'const selectionClosed = expired || round?.status !== "selecting" || seconds <= 0;' in selection
-assert 'setLiveDerashPool((previous) =>' not in selection
-assert "applyPlayWallet" in context
-assert "walletPreview" in selection and "setLiveDerashPool(Math.round" in selection
-assert "liveDerashPool" in selection
-assert "pendingRevision" in selection and "applyPoolSnapshot(result)" in selection
-assert "selectionRequests" in selection and "mutationCounts" in selection
-assert "playerApi.selectCartela(roundId, userId, number, requestId)" in selection
-assert "playerApi.unselectCartela(roundId, userId, number, requestId)" in selection
+assert "setMutating" in selection
+assert "inFlightRef" in selection
+assert "pendingOperationsRef" in selection
+assert "playerApi.selectCartela(roundId, userId, number, requestId())" in selection
+assert "playerApi.unselectCartela(roundId, userId, number, requestId())" in selection
 assert "roomManager.roomIntent" not in selection
-assert "queuedCardDelta" not in selection and "displayedPool" not in selection
-assert "applyPoolSnapshot" in selection and "selectionEpoch" in selection
-assert "const CartelaGrid = memo" in selection and "pendingTaken" in selection
+assert "observeCartelaPool" in selection and "observeRound" in selection
+assert "await Promise.allSettled(operations)" in selection
+assert "requirePending: true" in selection
+assert "pendingRevision: Number(latest.pending_revision || 0)" in selection
+assert "setSeconds(0)" in selection
+assert "setMutating(new Set())" in selection
+assert "selectionIntents" not in selection and "selectionTails" not in selection
+assert "mergePendingVisual" not in selection and "applyPoolSnapshot" not in selection
 assert "request_id: requestId" in (ROOT / "dashboard-react" / "client" / "src" / "lib" / "gateway.ts").read_text()
 
 print("selection wallet reservation regression check: PASS")

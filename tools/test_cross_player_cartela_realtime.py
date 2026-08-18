@@ -21,11 +21,11 @@ mutation_end = api.index('@app.post("/api/rounds/{round_id}/select")', mutation_
 mutation = api[mutation_start:mutation_end]
 assert "transaction.update(round_ref" in mutation
 assert "pending_revision" in mutation
-assert "lastPoolSnapshotFingerprint" in selection_test or "lastPoolSnapshotFingerprint" in (ROOT / "dashboard-react/client/src/pages/CartelaSelect.tsx").read_text()
 cartela_source = (ROOT / "dashboard-react/client/src/pages/CartelaSelect.tsx").read_text()
-assert "fingerprint !== lastPoolSnapshotFingerprint.current" in cartela_source
-assert "nextRevision < currentRevision" in cartela_source
-assert "nextFingerprint !== lastPoolSnapshotFingerprint.current" in cartela_source
+assert "revisionRef" in cartela_source
+assert "if (revision < revisionRef.current) return;" in cartela_source
+assert "if (!inFlightRef.current.size) publishSelected" in cartela_source
+assert "observeCartelaPool" in cartela_source
 
 # Model the reported ordering: revision 13 releases card 12, then an older
 # revision 12 full snapshot arrives. The older snapshot must be rejected.

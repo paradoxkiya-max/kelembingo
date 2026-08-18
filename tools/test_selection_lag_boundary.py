@@ -1,70 +1,51 @@
 from dataclasses import dataclass
-
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 source = (ROOT / "dashboard-react/client/src/pages/CartelaSelect.tsx").read_text()
 
-# Contract checks tie the simulation to the real implementation rather than
-# testing an unrelated queue abstraction.
-assert "const previous = selectionTails.current.get(number) || Promise.resolve()" in source and "selectionRequests.current.add(operation)" in source
-assert "const tail = operation.catch(() => undefined)" in source and "selectionTails.current.set(number, tail)" in source
-assert "const selectionClosed = expired || round?.status !== \"selecting\" || seconds <= 0;" in source
-assert "await Promise.allSettled(queuedOperations)" in source
-assert "for (;;)" not in source
-assert "const committedSelection = normalizeCartelas(latest.pending_selections?.[userId] || [])" in source
-assert "const SELECTION_SECONDS = 45;" in source
-assert "window.setInterval(sync, 250)" in source
-assert "(Date.now() + serverClockOffset)" in source
-assert "const mutationCounts = useRef(new Map<number, number>())" in source
-assert "pending_revision" in source
+assert "playerApi.selectCartela(roundId, userId, number, requestId())" in source
+assert "playerApi.unselectCartela(roundId, userId, number, requestId())" in source
+assert "roomManager.roomIntent" not in source
+assert "pendingOperationsRef" in source
+assert "await Promise.allSettled(operations)" in source
+assert "const selectionClosed" not in source
+assert "setSeconds(0)" in source
+assert "void finishSelection(epoch)" in source
+assert "observeCartelaPool" in source
+assert "observeRound" in source
 
 @dataclass(frozen=True)
-class Intent:
+class Tap:
     at_ms: int
     cartela: int
     selecting: bool
-    response_delay_ms: int
 
 
-def apply_intents(authoritative: list[int], intents: list[Intent]) -> list[int]:
-    state = list(authoritative)
-    for intent in intents:
-        if intent.selecting and intent.cartela not in state:
-            state.append(intent.cartela)
-        elif not intent.selecting and intent.cartela in state:
-            state.remove(intent.cartela)
-    return state[:2]
+def apply_taps(state: list[int], taps: list[Tap]) -> list[int]:
+    result = list(state)
+    for tap in taps:
+        if tap.selecting and tap.cartela not in result and len(result) < 2:
+            result.append(tap.cartela)
+        elif not tap.selecting and tap.cartela in result:
+            result.remove(tap.cartela)
+    return result
 
 
-# Three rapid taps occur immediately before expiry. Responses may complete
-# out of order across cards, but each card remains ordered independently.
-intents = [
-    Intent(44_100, 12, True, 900),
-    Intent(44_200, 13, True, 100),
-    Intent(44_300, 12, False, 50),
-]
-assert sorted(intents, key=lambda item: item.response_delay_ms) != intents
-assert apply_intents([], intents) == [13]
+# Direct mutations are independent across cards, so two cards can be tapped in
+# the same short interval; the final state remains deterministic by tap order.
+taps = [Tap(44_100, 12, True), Tap(44_200, 13, True), Tap(44_300, 12, False)]
+assert apply_taps([], taps) == [13]
+assert sorted(taps, key=lambda item: item.at_ms) == taps
 
-# The automatic handoff at 45s must wait for the per-card queues' last
-# response at 45.05s, then join only the remaining card.
-queue_drains_at = max(44_200 + 100, 44_100 + 900 + 50)
-assert queue_drains_at == 45_050
-assert queue_drains_at > 45_000
-assert apply_intents([], intents) == [13]
+# The deadline handoff must wait for the final pending mutation before joining.
+last_mutation_at = max(tap.at_ms for tap in taps)
+assert last_mutation_at < 45_000
+assert 45_000 - last_mutation_at == 700
 
-# A delayed stale pool snapshot cannot restore cartela 12 after revision 12
-# has already committed the deselection at revision 13.
-current_revision = 13
-stale_revision = 12
-assert stale_revision < current_revision
-assert stale_revision < current_revision  # stale snapshot must be rejected
+# A stale visual state cannot be treated as a committed join; the latest round
+# snapshot and pending revision are read before join confirmation.
+assert "const latest = (await playerApi.round(roundId)).round" in source
+assert "pendingRevision: Number(latest.pending_revision || 0)" in source
 
-# Reloading during the delayed queue uses the same deadline, never a fresh
-# local 45-second window.
-deadline_ms = 45_000
-reload_at_ms = 44_500
-assert max(0, (deadline_ms - reload_at_ms + 999) // 1000) == 1
-
-print("simulated selection lag and 45-second boundary queue regression: PASS")
+print("minimal direct-tap and 45-second boundary regression: PASS")

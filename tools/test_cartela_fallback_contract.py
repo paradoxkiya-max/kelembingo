@@ -11,10 +11,11 @@ assert "export function fallbackCartela" in fallback
 assert "export function isValidCartela" in fallback
 assert "values[12] === 0" in fallback
 assert "fallbackCartela(number)" in select
-assert "isValidCartela(card, number)" in select
+assert "playerApi.cartela(number)" in select
+assert "const valid = loaded.filter" in select
 assert "fallbackCartela(number)" in board
 assert "isValidCartela(card, number)" in board
-assert "Showing the verified local cartela while the server card is unavailable." in select
+assert "fallbackCartela(number)" in select and "setCards" in select
 assert "Showing the verified local cartela while the server card is unavailable." in board
 
 print("cartela fallback and background hydration contract check: PASS")

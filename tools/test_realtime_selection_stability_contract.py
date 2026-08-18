@@ -13,9 +13,10 @@ assert "if (isStaleRoundMessage(event, message)) return;" in realtime
 assert "warmedRoundCache" in gateway
 assert "export async function prewarmSelectionRound" in gateway
 assert "prewarmSelectionRound" in game
-assert "setSeconds(SELECTION_SECONDS)" in select
+assert "useState(SELECTION_SECONDS)" in select
+assert "deadlineSeconds" in select
 assert "refreshHandoff" not in select
-assert "if (joinedCartelas.length > 0)" in select
-assert "latest.status === \"playing\"" in select and "void confirmSelection()" in select
+assert "if (joined.length)" in select
+assert "latest.status === \"playing\"" in select and "void finishSelection(epoch)" in select
 
 print("realtime selection stability contract check: PASS")

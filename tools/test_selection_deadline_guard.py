@@ -77,7 +77,9 @@ gateway = (ROOT / "api" / "admin_api.py").read_text()
 selection = (ROOT / "dashboard-react" / "client" / "src" / "pages" / "CartelaSelect.tsx").read_text()
 assert "def _selection_deadline_expired" in gateway
 assert "Selection window closed; waiting for round transition" in gateway
-assert "selection window closed" in selection
-assert "joined.length > 0" in selection
+assert "deadlineStartedRef" in selection
+assert "const closed = Boolean(round && (round.status !== \"selecting\" || seconds <= 0));" in selection
+assert "void finishSelection(epoch)" in selection
+assert "joined.length" in selection
 
 print("selection deadline guard regression check: PASS")

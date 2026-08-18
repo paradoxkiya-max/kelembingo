@@ -22,12 +22,12 @@ assert 'event === "room_state"' in realtime
 assert 'roomJoin(roundId: string, userId: string)' in realtime
 assert 'roomIntent(intent: RoomIntent)' in realtime
 assert 'roomLeave(roundId: string)' in realtime
-assert 'roomManager.roomJoin' in select
-assert 'roomManager.roomIntent' in select
+assert 'roomManager.roomJoin' not in select
+assert 'roomManager.roomIntent' not in select
 assert 'ROUND_SNAPSHOT_CACHE_LIMIT = 32' in realtime and 'if (cached) deliver(cached)' in realtime
-assert 'playerApi.selectCartela(roundId, userId, number, requestId)' in select
-assert 'playerApi.unselectCartela(roundId, userId, number, requestId)' in select
+assert 'playerApi.selectCartela(roundId, userId, number, requestId())' in select
+assert 'playerApi.unselectCartela(roundId, userId, number, requestId())' in select
 assert 'selectionQueue' not in select
-assert 'selectionRequests' in select
+assert 'pendingOperationsRef' in select
 
 print("reference-inspired room protocol contract check: PASS")
