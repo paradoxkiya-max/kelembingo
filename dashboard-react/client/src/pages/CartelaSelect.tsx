@@ -123,6 +123,7 @@ export default function CartelaSelect() {
   const serverOffsetRef = useRef(0);
   const mutationTailsRef = useRef(new Map<number, Promise<void>>());
   const walletRef = useRef(0);
+  const walletInitializedRef = useRef(false);
   const walletMutationSeqRef = useRef(0);
   const appliedWalletMutationSeqRef = useRef(0);
   const currentRoundIdRef = useRef("");
@@ -137,6 +138,7 @@ export default function CartelaSelect() {
   const publishWallet = useCallback((value: number) => {
     const next = Math.max(0, Number(value) || 0);
     walletRef.current = next;
+    walletInitializedRef.current = true;
     setWallet(next);
     applyPlayWallet(next);
   }, [applyPlayWallet]);
@@ -263,7 +265,8 @@ export default function CartelaSelect() {
     setPending(pendingRef.current);
     setTaken(new Set(normalizeNumbers(next.taken_cartelas)));
     publishSelected([]);
-    publishWallet(walletValue(player?.play_wallet) || 0);
+    if (walletInitializedRef.current) setWallet(walletRef.current);
+    else publishWallet(walletValue(player?.play_wallet) || 0);
     setDerashPool(Number(next.derash) || calcDerash(Number(next.player_count || 0), pendingRef.current, stake));
     setSeconds(secondsLeft(next, serverOffsetRef.current));
     setLoading(false);
@@ -333,7 +336,7 @@ export default function CartelaSelect() {
       unsubscribeRound();
       unsubscribePool();
     };
-  }, [cleanupSelection, finishSelection, navigateToGame, player?.play_wallet, publishSelected, publishWallet, stake, userId]);
+  }, [cleanupSelection, finishSelection, navigateToGame, publishSelected, publishWallet, stake, userId]);
 
   const requestPlayNow = useCallback(async () => {
     if (playRunningRef.current) {
