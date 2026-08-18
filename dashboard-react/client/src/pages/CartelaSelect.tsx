@@ -361,17 +361,9 @@ export default function CartelaSelect() {
     const execute = async () => {
       if (selectionEpoch.current !== epoch || currentRoundId.current !== roundId || deadlineHandoff.current) return;
       try {
-        let result: PoolSnapshot & { ok?: boolean; play_wallet?: number; error?: string };
-        try {
-          result = await roomManager.roomIntent({ round_id: roundId, user_id: userId, intent_id: requestId, action: selecting ? "select" : "unselect", cartela_number: number });
-          if (!result.ok && /room_protocol_disabled|realtime connection unavailable|realtime request timed out|invalid realtime response/i.test(result.error || "")) throw new Error(result.error || "Realtime fallback");
-          if (!result.ok) throw new Error(result.error || "Selection failed");
-        } catch (roomError) {
-          if (!/room_protocol_disabled|realtime connection unavailable|realtime request timed out|invalid realtime response/i.test(roomError instanceof Error ? roomError.message : "")) throw roomError;
-          result = await (selecting
-            ? playerApi.selectCartela(roundId, userId, number, requestId)
-            : playerApi.unselectCartela(roundId, userId, number, requestId));
-        }
+        const result = await (selecting
+          ? playerApi.selectCartela(roundId, userId, number, requestId)
+          : playerApi.unselectCartela(roundId, userId, number, requestId));
         if (selectionEpoch.current !== epoch || currentRoundId.current !== roundId) return;
         if (pendingVisual.current.get(number) === selecting) pendingVisual.current.delete(number);
         applyPoolSnapshot(result);

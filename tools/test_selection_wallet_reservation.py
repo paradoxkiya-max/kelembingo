@@ -169,7 +169,10 @@ assert "applyPlayWallet" in context
 assert "walletPreview" in selection and "setLiveDerashPool(Math.round" in selection
 assert "liveDerashPool" in selection
 assert "pendingRevision" in selection and "applyPoolSnapshot(result)" in selection
-assert "selectionRequests" in selection and "mutationCounts" in selection and "roomManager.roomIntent" in selection
+assert "selectionRequests" in selection and "mutationCounts" in selection
+assert "playerApi.selectCartela(roundId, userId, number, requestId)" in selection
+assert "playerApi.unselectCartela(roundId, userId, number, requestId)" in selection
+assert "roomManager.roomIntent" not in selection
 assert "queuedCardDelta" not in selection and "displayedPool" not in selection
 assert "applyPoolSnapshot" in selection and "selectionEpoch" in selection
 assert "const CartelaGrid = memo" in selection and "pendingTaken" in selection
