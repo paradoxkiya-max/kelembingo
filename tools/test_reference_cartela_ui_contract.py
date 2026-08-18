@@ -7,7 +7,8 @@ select = (ROOT / "dashboard-react/client/src/pages/CartelaSelect.tsx").read_text
 assert 'Select Cartela' in select
 assert 'card-select-grid' in select
 assert 'CARTELA NO:' in select
-assert 'Tap to remove' in select
+assert 'Tap to remove' not in select
+assert 'onRemove' not in select
 assert 'Total Cost:' in select
 assert 'Starting…' in select
 assert 'bg-gradient-to-br from-emerald-500 to-emerald-600' in select
@@ -38,5 +39,10 @@ assert 'requestPlayNow' in select
 assert '0.8' in select
 assert 'playerApi.selectCartela(roundId, userId, number, requestId())' in select
 assert 'playerApi.unselectCartela(roundId, userId, number, requestId())' in select
+assert 'if (response.pending_selections)' in select
+assert 'if (response.taken_cartelas)' in select
+assert 'if (Number.isFinite(Number(response.play_wallet))' in select
+assert 'selecting\n        ? await playerApi.selectCartela' in select
+assert ': await playerApi.unselectCartela' in select
 
 print('reference cartela UI contract: PASS')
