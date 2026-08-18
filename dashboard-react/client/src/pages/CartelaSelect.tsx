@@ -362,7 +362,7 @@ export default function CartelaSelect() {
     // Automatic confirmation may be in progress, but a selected card must
     // remain removable until the queue is durably drained. New selections are
     // blocked during confirmation so the join cannot grow unexpectedly.
-    if ((busy && !isSelected) || (!isSelected && taken.has(number)) || !userId || expired || !round?.id) return;
+    if (busy || (!isSelected && taken.has(number)) || !userId || expired || !round?.id) return;
     if (!isSelected && current.length >= MAX_SELECTIONS) return;
     const intent: SelectionIntent = { id: selectionRequestId(), cartelaNumber: number, selecting: !isSelected };
     const roundId = String(round.id);
@@ -434,59 +434,69 @@ export default function CartelaSelect() {
   }, [applyPoolSnapshot, applyPlayWallet, busy, committedWallet, expired, player?.user_id, publishSelected, restartSelection, round?.id, sharedCartelaCount, stake, taken, wallet]);
 
   async function confirmSelection() {
-    if (!selectedRef.current.length || busy || !player?.user_id) return;
+    if (!selectedRef.current.length || busy || !player?.user_id || !round?.id) return;
     setBusy(true);
-    const committedSelection = normalizeCartelas(selectedRef.current);
-    if (!committedSelection.length) {
-      restartSelection();
-      return;
-    }
-    const activeRound = round;
-    if (!activeRound?.id || player.user_id === undefined || player.user_id === null) {
-      restartSelection();
-      return;
-    }
-    const activeRoundId = String(activeRound.id);
-
+    const activeRoundId = String(round.id);
     const userId = String(player.user_id);
+    const epoch = selectionEpoch.current;
     const displayName = player.username ? `@${player.username.replace(/^@/, "")}` : player.first_name || "Player";
-    // The server finalizer owns the deadline handoff. Prime GameBoard with the
-    // latest pending selection and navigate now; do not make the browser wait
-    // for every old tap acknowledgement or a second REST round read.
-    const handoffRound: Round = {
-      ...activeRound,
-      players: {
-        ...(activeRound.players || {}),
-        [userId]: {
-          ...(activeRound.players?.[userId] || {}),
-          cartelas: committedSelection,
-          name: displayName,
-        },
-      },
-      pending_selections: {
-        ...(activeRound.pending_selections || {}),
-        [userId]: committedSelection,
-      },
-    };
-    primeRoundSnapshot(activeRoundId, handoffRound);
-    abortSelectionQueue();
-    navigate(`/game?round=${encodeURIComponent(activeRoundId)}`, { replace: true });
+    try {
+      // Every tap is a durable mutation. Joining before this queue drains can
+      // race the last select/deselect and either strand a card or charge twice.
+      const queuedOperations = Array.from(selectionRequests.current);
+      if (queuedOperations.length) await Promise.allSettled(queuedOperations);
+      if (selectionEpoch.current !== epoch || currentRoundId.current !== activeRoundId) return;
 
-    // Finalization is intentionally background work. It is idempotent and
-    // shares the durable round/user lock with the gateway deadline finalizer;
-    // whichever path reaches the transaction first safely wins.
-    void (async () => {
-      try {
-        await playerApi.joinRound(activeRoundId, userId, committedSelection, displayName, {
-          requirePending: true,
-          pendingRevision: Number(activeRound.pending_revision || 0),
-        });
-      } catch (joinError) {
-        if (!/already joined|selection window closed|round is no longer accepting/i.test(joinError instanceof Error ? joinError.message : "")) return;
+      const latest = await playerApi.round(activeRoundId).then((response) => response.round);
+      if (!latest?.id) throw new Error("Round is no longer available");
+      const joinedAlready = normalizeCartelas(latest.players?.[userId]?.cartelas || []);
+      if (latest.status === "playing" || joinedAlready.length > 0) {
+        primeRoundSnapshot(activeRoundId, latest);
+        abortSelectionQueue();
+        setWalletPreview(null);
+        navigate(`/game?round=${encodeURIComponent(activeRoundId)}`, { replace: true });
+        return;
       }
+
+      applyPoolSnapshot(latest);
+      const committedSelection = normalizeCartelas(latest.pending_selections?.[userId] || []);
+      if (!committedSelection.length) {
+        publishSelected([]);
+        setWalletPreview(null);
+        setError("Your cartela selection was released. Please choose again.");
+        return;
+      }
+
+      const response = await playerApi.joinRound(activeRoundId, userId, committedSelection, displayName, {
+        requirePending: true,
+        pendingRevision: Number(latest.pending_revision || 0),
+      });
+      const joinedRound = response.round || await playerApi.round(activeRoundId).then((result) => result.round);
+      const committedOnServer = normalizeCartelas(joinedRound?.players?.[userId]?.cartelas || []);
+      if (!committedOnServer.length || !committedSelection.every((number) => committedOnServer.includes(number))) {
+        throw new Error("The server did not confirm the selected cartelas");
+      }
+      primeRoundSnapshot(activeRoundId, joinedRound);
+      abortSelectionQueue();
+      publishSelected([]);
+      setWalletPreview(null);
+      navigate(`/game?round=${encodeURIComponent(activeRoundId)}`, { replace: true });
+    } catch (e) {
+      if (selectionEpoch.current !== epoch || currentRoundId.current !== activeRoundId) return;
+      const message = e instanceof Error ? e.message : "Could not join the round";
       const latest = await playerApi.round(activeRoundId).then((response) => response.round).catch(() => null);
-      if (latest?.id) primeRoundSnapshot(activeRoundId, latest);
-    })();
+      const joined = normalizeCartelas(latest?.players?.[userId]?.cartelas || []);
+      if (latest?.id && (latest.status === "playing" || joined.length > 0)) {
+        primeRoundSnapshot(activeRoundId, latest);
+        abortSelectionQueue();
+        setWalletPreview(null);
+        navigate(`/game?round=${encodeURIComponent(activeRoundId)}`, { replace: true });
+        return;
+      }
+      setError(message);
+    } finally {
+      if (selectionEpoch.current === epoch) setBusy(false);
+    }
   }
 
   return <div className="flex min-h-[calc(100vh-56px)] flex-col bg-[linear-gradient(180deg,#0d0f22_0%,#151833_40%,#0d0f22_100%)]">

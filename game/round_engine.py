@@ -278,6 +278,7 @@ class RoundEngine:
             total_cartelas=TOTAL_CARTELAS,
             idempotency_key=operation_key,
             require_pending=require_pending,
+            pending_revision=pending_revision,
         )
     async def join_round(self, round_id: str, user_id: int,
                          cartela_numbers: List[int], user_name: str,

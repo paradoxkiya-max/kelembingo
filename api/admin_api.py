@@ -604,6 +604,8 @@ class JoinRoundRequest(BaseModel):
     user_id: int
     cartela_numbers: List[int]
     user_name: str = "Player"
+    require_pending: bool = False
+    pending_revision: int = 0
 
 
 class SelectRequest(BaseModel):
@@ -1149,7 +1151,12 @@ async def join_round(round_id: str, req: JoinRoundRequest, request: Request):
     """Player joins a round with chosen cartelas (user verified from player token)."""
     user_id = _actor_user_id(request, req.user_id)
     result = await engine.join_round(
-        round_id, user_id, req.cartela_numbers, req.user_name
+        round_id,
+        user_id,
+        req.cartela_numbers,
+        req.user_name,
+        require_pending=bool(req.require_pending),
+        pending_revision=int(req.pending_revision or 0),
     )
     if 'error' in result:
         raise HTTPException(status_code=400, detail=result['error'])
@@ -1157,6 +1164,9 @@ async def join_round(round_id: str, req: JoinRoundRequest, request: Request):
     # Broadcast real-time cartela pool update
     await broadcast_cartela_pool(round_id)
     await broadcast_event('rounds', round_id)
+    latest = await _db(lambda: db.collection('rounds').document(round_id).get())
+    if latest.exists:
+        return {**result, 'round': {'id': round_id, **(latest.to_dict() or {})}}
     return result
 
 

@@ -277,6 +277,7 @@ def join_round(
     total_cartelas=75,
     idempotency_key=None,
     require_pending=False,
+    pending_revision=0,
 ):
     """Join a round and reserve cards with one durable account/round transaction."""
     round_id = str(round_id)
@@ -320,6 +321,13 @@ def join_round(
         added_cartelas = [number for number in combined_cartelas if number not in existing_cartelas]
 
         if require_pending:
+            current_revision = int(round_data.get("pending_revision", 0) or 0)
+            # Revisions are round-global: another player may select or release a
+            # card after this player’s last response. Only reject an impossible
+            # rollback; membership in this player’s current pending set remains
+            # the authoritative join check.
+            if int(pending_revision or 0) and current_revision < int(pending_revision):
+                return {"error": "Cartela selection changed; please review your selected cartelas"}
             pending = round_data.get("pending_selections", {}) or {}
             pending_numbers = pending.get(uid_str, []) if isinstance(pending, dict) else []
             try:
